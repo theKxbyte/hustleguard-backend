@@ -1,0 +1,185 @@
+
+<style>
+#erd { width: 100%; overflow-x: auto; }
+#erd svg { min-width: 600px; }
+</style>
+<div id="erd"></div>
+<script type="module">
+import mermaid from 'https://esm.sh/mermaid@11/dist/mermaid.esm.min.mjs';
+const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+await document.fonts.ready;
+mermaid.initialize({
+  startOnLoad: false,
+  theme: 'base',
+  fontFamily: '"Anthropic Sans", sans-serif',
+  themeVariables: {
+    darkMode: dark,
+    fontSize: '13px',
+    fontFamily: '"Anthropic Sans", sans-serif',
+    lineColor: dark ? '#9c9a92' : '#73726c',
+    textColor: dark ? '#c2c0b6' : '#3d3d3a',
+    primaryColor: dark ? '#3C3489' : '#EEEDFE',
+    primaryBorderColor: dark ? '#7F77DD' : '#534AB7',
+    primaryTextColor: dark ? '#CECBF6' : '#26215C',
+    secondaryColor: dark ? '#085041' : '#E1F5EE',
+    secondaryBorderColor: dark ? '#1D9E75' : '#0F6E56',
+    secondaryTextColor: dark ? '#9FE1CB' : '#04342C',
+    tertiaryColor: dark ? '#633806' : '#FAEEDA',
+    tertiaryBorderColor: dark ? '#BA7517' : '#854F0B',
+    tertiaryTextColor: dark ? '#FAC775' : '#412402',
+  },
+  er: { diagramPadding: 20, layoutDirection: 'TB', minEntityWidth: 100, minEntityHeight: 75 }
+});
+
+const diagram = `erDiagram
+  users {
+    uuid id PK
+    string name
+    string email
+    string password_hash
+    string role
+    uuid shop_id FK
+    timestamp created_at
+  }
+
+  shops {
+    uuid id PK
+    string name
+    string phone
+    string location
+    timestamp created_at
+  }
+
+  categories {
+    uuid id PK
+    uuid shop_id FK
+    string name
+  }
+
+  suppliers {
+    uuid id PK
+    uuid shop_id FK
+    string name
+    string contact
+  }
+
+  products {
+    uuid id PK
+    uuid shop_id FK
+    uuid category_id FK
+    uuid supplier_id FK
+    string name
+    string barcode
+    decimal buying_price
+    decimal selling_price
+    int stock
+    int minimum_stock
+    timestamp last_sold_at
+    timestamp created_at
+    timestamp updated_at
+  }
+
+  sales {
+    uuid id PK
+    uuid shop_id FK
+    uuid created_by FK
+    decimal total
+    decimal profit
+    timestamp date
+  }
+
+  sale_items {
+    uuid id PK
+    uuid sale_id FK
+    uuid product_id FK
+    int quantity
+    decimal selling_price
+    decimal buying_price
+    decimal profit
+  }
+
+  stock_movements {
+    uuid id PK
+    uuid product_id FK
+    uuid created_by FK
+    string type
+    int quantity
+    string note
+    timestamp created_at
+  }
+
+  alerts {
+    uuid id PK
+    uuid shop_id FK
+    uuid product_id FK
+    string type
+    string message
+    boolean is_read
+    timestamp created_at
+  }
+
+  price_change_logs {
+    uuid id PK
+    uuid product_id FK
+    decimal old_price
+    decimal new_price
+    timestamp changed_at
+  }
+
+  photo_reminders {
+    uuid id PK
+    uuid shop_id FK
+    uuid product_id FK
+    string photo_url
+    string note
+    timestamp remind_at
+    boolean is_done
+    timestamp created_at
+  }
+
+  shops ||--o{ users : "has"
+  shops ||--o{ categories : "has"
+  shops ||--o{ suppliers : "has"
+  shops ||--o{ products : "has"
+  shops ||--o{ sales : "records"
+  shops ||--o{ alerts : "receives"
+  shops ||--o{ photo_reminders : "stores"
+  categories ||--o{ products : "groups"
+  suppliers ||--o{ products : "supplies"
+  products ||--o{ sale_items : "appears in"
+  products ||--o{ stock_movements : "tracked by"
+  products ||--o{ alerts : "triggers"
+  products ||--o{ price_change_logs : "logs"
+  products ||--o{ photo_reminders : "linked to"
+  sales ||--o{ sale_items : "contains"
+  users ||--o{ sales : "creates"
+  users ||--o{ stock_movements : "records"
+`;
+
+const { svg } = await mermaid.render('erd-svg', diagram);
+document.getElementById('erd').innerHTML = svg;
+
+document.querySelectorAll('#erd svg .node').forEach(node => {
+  const firstPath = node.querySelector('path[d]');
+  if (!firstPath) return;
+  const d = firstPath.getAttribute('d');
+  const nums = d.match(/-?[\d.]+/g)?.map(Number);
+  if (!nums || nums.length < 8) return;
+  const xs = [nums[0], nums[2], nums[4], nums[6]];
+  const ys = [nums[1], nums[3], nums[5], nums[7]];
+  const x = Math.min(...xs), y = Math.min(...ys);
+  const w = Math.max(...xs) - x, h = Math.max(...ys) - y;
+  const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+  rect.setAttribute('x', x); rect.setAttribute('y', y);
+  rect.setAttribute('width', w); rect.setAttribute('height', h);
+  rect.setAttribute('rx', '8');
+  for (const a of ['fill', 'stroke', 'stroke-width', 'class', 'style']) {
+    if (firstPath.hasAttribute(a)) rect.setAttribute(a, firstPath.getAttribute(a));
+  }
+  firstPath.replaceWith(rect);
+});
+
+document.querySelectorAll('#erd svg .row-rect-odd path, #erd svg .row-rect-even path').forEach(p => {
+  p.setAttribute('stroke', 'none');
+});
+</script>
