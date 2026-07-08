@@ -7,6 +7,8 @@ import connectDB from './config/db.js';
 import authRoutes from './routes/authRoutes.js';
 import productRoutes from './routes/productRoutes.js';
 import saleRoutes from './routes/saleRoutes.js';
+import alertRoutes from './routes/alertRoutes.js';
+
 
 
 dotenv.config();
@@ -24,6 +26,7 @@ app.use(morgan('dev'));
 app.use('/api/auth', authRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/sales', saleRoutes);
+app.use('/api/alerts', alertRoutes);
 
 // Health check
 app.get('/health', (req, res) => {
@@ -48,7 +51,7 @@ connectDB();
 
 // Start server
 app.listen(PORT, () => {
-  console.log(`🚀 HustleGuard Server running on port ${PORT}`);
+  console.log(`HustleGuard Server running on port ${PORT}`);
 });
 
 export default app;

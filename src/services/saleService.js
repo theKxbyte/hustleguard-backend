@@ -5,6 +5,8 @@ import Product from '../models/Product.js';
 export const recordSale = async (saleData, userId) => {
   const { productId, quantity, sellingPrice, customer, paymentMethod, notes } = saleData;
   
+  console.log(`📝 Recording sale: ${quantity} units of ${productId}`);
+  
   // Get product and verify ownership
   const product = await Product.findOne({ 
     _id: productId, 
@@ -14,6 +16,8 @@ export const recordSale = async (saleData, userId) => {
   if (!product) {
     throw new Error('Product not found');
   }
+  
+  console.log(`📦 Current stock for ${product.name}: ${product.quantity}`);
   
   // Check stock
   if (product.quantity < quantity) {
@@ -38,9 +42,14 @@ export const recordSale = async (saleData, userId) => {
     saleDate: new Date()
   });
   
-  // Update product stock
-  product.quantity -= quantity;
-  await product.save();
+  // Update product stock using findByIdAndUpdate with $inc
+  const updatedProduct = await Product.findByIdAndUpdate(
+    productId,
+    { $inc: { quantity: -quantity } },
+    { new: true, runValidators: true }
+  );
+  
+  console.log(`✅ Stock updated: ${updatedProduct.name} (${updatedProduct.quantity} remaining)`);
   
   return sale;
 };
@@ -146,4 +155,39 @@ export const getSalesStats = async (userId) => {
     },
     topProducts
   };
+};
+
+// Get single sale
+export const getSaleById = async (saleId, userId) => {
+  const sale = await Sale.findOne({ 
+    _id: saleId, 
+    owner: userId 
+  }).populate('product', 'name category');
+  
+  if (!sale) {
+    throw new Error('Sale not found');
+  }
+  
+  return sale;
+};
+
+// Delete sale (and restore stock)
+export const deleteSale = async (saleId, userId) => {
+  const sale = await Sale.findOne({ 
+    _id: saleId, 
+    owner: userId 
+  });
+  
+  if (!sale) {
+    throw new Error('Sale not found');
+  }
+  
+  // Restore product stock using atomic update
+  await Product.findByIdAndUpdate(
+    sale.product,
+    { $inc: { quantity: sale.quantity } }
+  );
+  
+  await sale.deleteOne();
+  return { message: 'Sale deleted successfully' };
 };

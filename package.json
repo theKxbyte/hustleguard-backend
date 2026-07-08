@@ -4,9 +4,15 @@
   "type": "module",
   "description": "HustleGuard Backend - Inventory Management System",
   "main": "src/app.js",
+  
   "scripts": {
     "start": "node src/app.js",
-    "dev": "nodemon src/app.js"
+    "dev": "nodemon src/app.js",
+    "seed": "node src/scripts/seeder.js",
+    "seed:destroy": "node src/scripts/seeder.js -d",
+    "test:scenarios": "node src/scripts/testScenarios.js",
+    "test:scenario": "node src/scripts/testScenarios.js --scenario",
+    "test:runner": "node src/scripts/testRunner.js"
   },
   "repository": {
     "type": "git",

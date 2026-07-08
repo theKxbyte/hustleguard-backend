@@ -108,3 +108,38 @@ export const updateStock = async (productId, userId, quantityChange) => {
   await product.updateStock(quantityChange);
   return product;
 };
+
+// Update product with price change detection
+export const updateProductWithPriceCheck = async (productId, userId, updateData) => {
+  const product = await Product.findOne({ 
+    _id: productId, 
+    owner: userId 
+  });
+  
+  if (!product) {
+    throw new Error('Product not found');
+  }
+  
+  // Check for supplier price change
+  let priceChangeAlert = null;
+  if (updateData.supplierPrice !== undefined && 
+      updateData.supplierPrice !== product.supplierPrice) {
+    // Import alert service and create price change alert
+    const { checkSupplierPriceChanges } = await import('./alertService.js');
+    priceChangeAlert = await checkSupplierPriceChanges(
+      productId,
+      userId,
+      product.supplierPrice,
+      updateData.supplierPrice
+    );
+  }
+  
+  // Update product
+  const updatedProduct = await Product.findByIdAndUpdate(
+    productId,
+    updateData,
+    { new: true, runValidators: true }
+  );
+  
+  return { product: updatedProduct, priceChangeAlert };
+};
