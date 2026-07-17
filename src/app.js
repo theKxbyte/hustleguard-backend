@@ -55,6 +55,8 @@ app.use((err, req, res, next) => {
 // Connect to database
 connectDB();
 
+
+
 // Start server
 app.listen(PORT, () => {
   console.log(`🚀 HustleGuard Server running on port ${PORT}`);
