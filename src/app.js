@@ -55,7 +55,6 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(morgan('dev'));
 
-// ✅ Add response headers middleware (backup)
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
@@ -75,6 +74,14 @@ app.get('/health', (req, res) => {
   res.status(200).json({ 
     success: true,
     status: 'healthy',
+    timestamp: new Date().toISOString()
+  });
+});
+
+app.get('/', (req, res) => {
+  res.status(200).json({ 
+    success: true,
+    status: 'ok',
     timestamp: new Date().toISOString()
   });
 });
