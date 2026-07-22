@@ -14,10 +14,8 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// ✅ CORS Configuration - This works!
 const corsOptions = {
   origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) {
       return callback(null, true);
     }
@@ -28,25 +26,21 @@ const corsOptions = {
       'http://localhost:5173',
     ];
     
-    // Check if origin is allowed
     if (allowedOrigins.indexOf(origin) !== -1 || origin.includes('vercel.app')) {
-      console.log('✅ CORS allowed for:', origin);
       callback(null, true);
     } else {
-      console.log('❌ CORS blocked for:', origin);
       callback(new Error('Not allowed by CORS'));
     }
   },
   credentials: true,
   optionsSuccessStatus: 200,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
 };
 
 app.use(cors(corsOptions));
-
-// Handle preflight requests explicitly
 app.options('*', cors(corsOptions));
 
-// Middleware
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" },
   crossOriginOpenerPolicy: false,
@@ -55,21 +49,11 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(morgan('dev'));
 
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
-  res.header('Access-Control-Allow-Credentials', 'true');
-  next();
-});
-
-// Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/sales', saleRoutes);
 app.use('/api/alerts', alertRoutes);
 
-// Health check
 app.get('/health', (req, res) => {
   res.status(200).json({ 
     success: true,
@@ -86,7 +70,6 @@ app.get('/', (req, res) => {
   });
 });
 
-// Test CORS endpoint
 app.get('/api/test', (req, res) => {
   res.json({
     success: true,
@@ -96,7 +79,6 @@ app.get('/api/test', (req, res) => {
   });
 });
 
-// 404 handler
 app.use((req, res) => {
   res.status(404).json({
     success: false,
@@ -104,20 +86,16 @@ app.use((req, res) => {
   });
 });
 
-// Error handler
 app.use((err, req, res, next) => {
-  console.error('❌ Error:', err.stack);
+  console.error('Error:', err.stack);
   res.status(err.status || 500).json({
     success: false,
     message: err.message || 'Something went wrong!'
   });
 });
 
-// Connect to database
 connectDB();
 
-// Start server
 app.listen(PORT, () => {
-  console.log(`🚀 HustleGuard Server running on port ${PORT}`);
-  console.log(`📍 CORS enabled for: Vercel and localhost`);
+  console.log(`Server running on port ${PORT}`);
 });

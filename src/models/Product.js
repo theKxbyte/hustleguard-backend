@@ -17,6 +17,14 @@ const productSchema = new mongoose.Schema({
     trim: true,
     enum: ['Electronics', 'Clothing', 'Food', 'Beverages', 'Health', 'Beauty', 'Home', 'Sports', 'Toys', 'Books', 'Other']
   },
+  barcode: {
+    type: String,
+    unique: true,
+    sparse: true,
+    trim: true,
+    match: [/^[0-9]+$/, 'Barcode must contain only numbers'],
+    maxlength: [20, 'Barcode cannot be more than 20 characters']
+  },
   buyingPrice: {
     type: Number,
     required: [true, 'Please add a buying price'],
@@ -43,6 +51,13 @@ const productSchema = new mongoose.Schema({
     type: Number,
     default: 5,
     min: [0, 'Minimum stock alert must be a positive number']
+  },
+  unit: {
+    type: String,
+    required: [true, 'Please add a unit of measurement'],
+    trim: true,
+    enum: ['pcs', 'kg', 'g', 'ml', 'L', 'pack', 'box', 'dozen', 'pair', 'set', 'roll', 'meter', 'cm', 'inch', 'other'],
+    default: 'pcs'
   },
   supplier: {
     type: String,
@@ -72,6 +87,7 @@ const productSchema = new mongoose.Schema({
 productSchema.index({ owner: 1, name: 1 });
 productSchema.index({ owner: 1, category: 1 });
 productSchema.index({ owner: 1, quantity: 1 });
+productSchema.index({ barcode: 1 }); // Index for barcode lookups
 
 // Virtual: Calculate profit per unit
 productSchema.virtual('profitPerUnit').get(function() {
