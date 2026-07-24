@@ -1,3 +1,4 @@
+// models/Product.js - UPDATED SCHEMA
 import mongoose from 'mongoose';
 
 const productSchema = new mongoose.Schema({
@@ -33,13 +34,8 @@ const productSchema = new mongoose.Schema({
   sellingPrice: {
     type: Number,
     required: [true, 'Please add a selling price'],
-    min: [0, 'Selling price must be a positive number'],
-    validate: {
-      validator: function(value) {
-        return value >= this.buyingPrice;
-      },
-      message: 'Selling price must be greater than or equal to buying price'
-    }
+    min: [0, 'Selling price must be a positive number']
+    // REMOVED the validate property - we'll handle this in the service
   },
   quantity: {
     type: Number,
@@ -87,7 +83,7 @@ const productSchema = new mongoose.Schema({
 productSchema.index({ owner: 1, name: 1 });
 productSchema.index({ owner: 1, category: 1 });
 productSchema.index({ owner: 1, quantity: 1 });
-productSchema.index({ barcode: 1 }); // Index for barcode lookups
+productSchema.index({ barcode: 1 });
 
 // Virtual: Calculate profit per unit
 productSchema.virtual('profitPerUnit').get(function() {

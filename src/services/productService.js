@@ -1,7 +1,13 @@
+// services/productService.js - UPDATED
 import Product from '../models/Product.js';
 
 // Create product
 export const createProduct = async (productData, userId) => {
+  // Validate prices before creating
+  if (productData.sellingPrice < productData.buyingPrice) {
+    throw new Error(`Selling price (${productData.sellingPrice}) must be greater than or equal to buying price (${productData.buyingPrice})`);
+  }
+  
   const product = await Product.create({
     ...productData,
     owner: userId
@@ -13,12 +19,10 @@ export const createProduct = async (productData, userId) => {
 export const getProducts = async (userId, filters = {}) => {
   const query = { owner: userId, ...filters };
   
-  // If category filter provided
   if (filters.category) {
     query.category = filters.category;
   }
   
-  // If active filter provided
   if (filters.isActive !== undefined) {
     query.isActive = filters.isActive;
   }
@@ -41,8 +45,9 @@ export const getProductById = async (productId, userId) => {
   return product;
 };
 
-// Update product
+// Update product - FIXED with manual validation
 export const updateProduct = async (productId, userId, updateData) => {
+  // Find the product first
   const product = await Product.findOne({ 
     _id: productId, 
     owner: userId 
@@ -51,20 +56,80 @@ export const updateProduct = async (productId, userId, updateData) => {
   if (!product) {
     throw new Error('Product not found');
   }
+
+  // Get the current values
+  const currentBuyingPrice = product.buyingPrice;
+  const currentSellingPrice = product.sellingPrice;
   
-  // If updating selling price, validate it's >= buying price
-  if (updateData.sellingPrice && updateData.sellingPrice < (updateData.buyingPrice || product.buyingPrice)) {
-    throw new Error('Selling price must be greater than or equal to buying price');
+  // Determine final values (use new values if provided, otherwise keep current)
+  const finalBuyingPrice = updateData.buyingPrice !== undefined 
+    ? updateData.buyingPrice 
+    : currentBuyingPrice;
+    
+  const finalSellingPrice = updateData.sellingPrice !== undefined 
+    ? updateData.sellingPrice 
+    : currentSellingPrice;
+
+  // MANUAL VALIDATION: Check if selling price >= buying price
+  if (finalSellingPrice < finalBuyingPrice) {
+    throw new Error(`Selling price (${finalSellingPrice}) must be greater than or equal to buying price (${finalBuyingPrice})`);
   }
-  
-  // Update product
-  const updatedProduct = await Product.findByIdAndUpdate(
-    productId,
-    updateData,
-    { new: true, runValidators: true }
+
+  // Update the product using findOneAndUpdate with the validated data
+  const updatedProduct = await Product.findOneAndUpdate(
+    { _id: productId, owner: userId },
+    {
+      $set: {
+        name: updateData.name !== undefined ? updateData.name : product.name,
+        category: updateData.category !== undefined ? updateData.category : product.category,
+        buyingPrice: finalBuyingPrice,
+        sellingPrice: finalSellingPrice,
+        quantity: updateData.quantity !== undefined ? updateData.quantity : product.quantity,
+        minStockAlert: updateData.minStockAlert !== undefined ? updateData.minStockAlert : product.minStockAlert,
+        unit: updateData.unit !== undefined ? updateData.unit : product.unit,
+        supplier: updateData.supplier !== undefined ? updateData.supplier : product.supplier,
+        supplierPrice: updateData.supplierPrice !== undefined ? updateData.supplierPrice : product.supplierPrice,
+        description: updateData.description !== undefined ? updateData.description : product.description,
+        barcode: updateData.barcode !== undefined ? updateData.barcode : product.barcode
+      }
+    },
+    { 
+      new: true,
+      runValidators: true
+    }
   );
   
+  if (!updatedProduct) {
+    throw new Error('Product not found after update');
+  }
+  
   return updatedProduct;
+};
+
+// Alternative: Using save() method (even more reliable)
+export const updateProductAlternative = async (productId, userId, updateData) => {
+  const product = await Product.findOne({ 
+    _id: productId, 
+    owner: userId 
+  });
+  
+  if (!product) {
+    throw new Error('Product not found');
+  }
+
+  // Apply updates
+  Object.keys(updateData).forEach(key => {
+    product[key] = updateData[key];
+  });
+
+  // Manual validation before saving
+  if (product.sellingPrice < product.buyingPrice) {
+    throw new Error(`Selling price (${product.sellingPrice}) must be greater than or equal to buying price (${product.buyingPrice})`);
+  }
+
+  // Save with validation
+  await product.save();
+  return product;
 };
 
 // Delete product
@@ -120,11 +185,9 @@ export const updateProductWithPriceCheck = async (productId, userId, updateData)
     throw new Error('Product not found');
   }
   
-  // Check for supplier price change
   let priceChangeAlert = null;
   if (updateData.supplierPrice !== undefined && 
       updateData.supplierPrice !== product.supplierPrice) {
-    // Import alert service and create price change alert
     const { checkSupplierPriceChanges } = await import('./alertService.js');
     priceChangeAlert = await checkSupplierPriceChanges(
       productId,
@@ -134,7 +197,6 @@ export const updateProductWithPriceCheck = async (productId, userId, updateData)
     );
   }
   
-  // Update product
   const updatedProduct = await Product.findByIdAndUpdate(
     productId,
     updateData,
