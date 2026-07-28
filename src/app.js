@@ -8,6 +8,7 @@ import authRoutes from './routes/authRoutes.js';
 import productRoutes from './routes/productRoutes.js';
 import saleRoutes from './routes/saleRoutes.js';
 import alertRoutes from './routes/alertRoutes.js';
+import posRoutes from './routes/posRoutes.js';
 
 dotenv.config();
 
@@ -53,6 +54,8 @@ app.use('/api/auth', authRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/sales', saleRoutes);
 app.use('/api/alerts', alertRoutes);
+app.use('/api/pos', posRoutes);
+
 
 app.get('/health', (req, res) => {
   res.status(200).json({ 
