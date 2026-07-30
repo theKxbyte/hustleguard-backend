@@ -9,6 +9,8 @@ import productRoutes from './routes/productRoutes.js';
 import saleRoutes from './routes/saleRoutes.js';
 import alertRoutes from './routes/alertRoutes.js';
 import posRoutes from './routes/posRoutes.js';
+import dashboardRoutes from './routes/dashboardRoutes.js';
+
 
 dotenv.config();
 
@@ -55,6 +57,7 @@ app.use('/api/products', productRoutes);
 app.use('/api/sales', saleRoutes);
 app.use('/api/alerts', alertRoutes);
 app.use('/api/pos', posRoutes);
+app.use('/api/dashboard', dashboardRoutes);
 
 
 app.get('/health', (req, res) => {
