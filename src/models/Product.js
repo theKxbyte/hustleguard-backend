@@ -1,5 +1,46 @@
-// models/Product.js - UPDATED SCHEMA
+// models/Product.js
 import mongoose from 'mongoose';
+
+const unitSchema = new mongoose.Schema({
+  name: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  label: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  conversion: {
+    type: Number,
+    required: true,
+    min: [0.001, 'Conversion must be greater than 0']
+  },
+  isBase: {
+    type: Boolean,
+    default: false
+  },
+  buyPrice: {
+    type: Number,
+    min: [0, 'Buy price must be a positive number'],
+    default: 0
+  },
+  sellPrice: {
+    type: Number,
+    min: [0, 'Sell price must be a positive number'],
+    default: 0
+  },
+  barcode: {
+    type: String,
+    trim: true,
+    sparse: true
+  },
+  isActive: {
+    type: Boolean,
+    default: true
+  }
+});
 
 const productSchema = new mongoose.Schema({
   name: {
@@ -15,45 +56,51 @@ const productSchema = new mongoose.Schema({
   category: {
     type: String,
     required: [true, 'Please add a category'],
-    trim: true,
-    enum: ['Electronics', 'Clothing', 'Food', 'Beverages', 'Health', 'Beauty', 'Home', 'Sports', 'Toys', 'Books', 'Other']
+    trim: true
   },
-  barcode: {
-    type: String,
-    unique: true,
-    sparse: true,
-    trim: true,
-    match: [/^[0-9]+$/, 'Barcode must contain only numbers'],
-    maxlength: [20, 'Barcode cannot be more than 20 characters']
+  
+  // UOM Configuration
+  baseUnit: {
+    name: {
+      type: String,
+      required: [true, 'Please add a base unit name'],
+      trim: true
+    },
+    label: {
+      type: String,
+      required: [true, 'Please add a base unit label'],
+      trim: true
+    }
   },
+  
+  sellUnits: [unitSchema],
+  stockUnits: [unitSchema],
+  
+  // Legacy fields (kept for backward compatibility)
   buyingPrice: {
     type: Number,
-    required: [true, 'Please add a buying price'],
-    min: [0, 'Buying price must be a positive number']
+    min: [0, 'Buying price must be a positive number'],
+    default: 0
   },
   sellingPrice: {
     type: Number,
-    required: [true, 'Please add a selling price'],
-    min: [0, 'Selling price must be a positive number']
-    // REMOVED the validate property - we'll handle this in the service
+    min: [0, 'Selling price must be a positive number'],
+    default: 0
   },
   quantity: {
     type: Number,
-    required: [true, 'Please add quantity'],
-    min: [0, 'Quantity must be a positive number'],
-    default: 0
+    default: 0,
+    min: [0, 'Quantity must be a positive number']
   },
+  unit: {
+    type: String,
+    trim: true
+  },
+  
   minStockAlert: {
     type: Number,
     default: 5,
     min: [0, 'Minimum stock alert must be a positive number']
-  },
-  unit: {
-    type: String,
-    required: [true, 'Please add a unit of measurement'],
-    trim: true,
-    enum: ['pcs', 'kg', 'g', 'ml', 'L', 'pack', 'box', 'dozen', 'pair', 'set', 'roll', 'meter', 'cm', 'inch', 'other'],
-    default: 'pcs'
   },
   supplier: {
     type: String,
@@ -79,37 +126,36 @@ const productSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Indexes for better performance
+// Indexes
 productSchema.index({ owner: 1, name: 1 });
 productSchema.index({ owner: 1, category: 1 });
-productSchema.index({ owner: 1, quantity: 1 });
-productSchema.index({ barcode: 1 });
+productSchema.index({ owner: 1, 'baseUnit.name': 1 });
 
-// Virtual: Calculate profit per unit
-productSchema.virtual('profitPerUnit').get(function() {
-  return this.sellingPrice - this.buyingPrice;
-});
+// Methods
+productSchema.methods.isValidSellUnit = function(unitName) {
+  return this.sellUnits.some(u => u.name === unitName && u.isActive);
+};
 
-// Virtual: Total stock value
-productSchema.virtual('stockValue').get(function() {
-  return this.quantity * this.buyingPrice;
-});
+productSchema.methods.getSellUnit = function(unitName) {
+  return this.sellUnits.find(u => u.name === unitName && u.isActive);
+};
 
-// Method: Check if product is low stock
+productSchema.methods.getStockUnit = function(unitName) {
+  return this.stockUnits.find(u => u.name === unitName && u.isActive);
+};
+
+productSchema.methods.getConversion = function(unitName) {
+  const allUnits = [...this.sellUnits, ...this.stockUnits];
+  const unit = allUnits.find(u => u.name === unitName);
+  return unit ? unit.conversion : null;
+};
+
 productSchema.methods.isLowStock = function() {
   return this.quantity <= this.minStockAlert;
 };
 
-// Method: Check if product is out of stock
 productSchema.methods.isOutOfStock = function() {
   return this.quantity === 0;
-};
-
-// Method: Update stock
-productSchema.methods.updateStock = function(quantityChange) {
-  this.quantity += quantityChange;
-  if (this.quantity < 0) this.quantity = 0;
-  return this.save();
 };
 
 const Product = mongoose.model('Product', productSchema);

@@ -1,38 +1,48 @@
 // controllers/dashboardController.js
 import Product from '../models/Product.js';
+import StockBatch from '../models/StockBatch.js';
 import Sale from '../models/Sale.js';
 import mongoose from 'mongoose';
 
-// @desc    Get dashboard statistics (Inventory Value, Weekly Sales, Weekly Gross Profit)
+// ============================================================
+// @desc    Get dashboard statistics
 // @route   GET /api/dashboard/stats
 // @access  Private
+// ============================================================
 export const getDashboardStats = async (req, res) => {
   try {
     const userId = req.user.id;
 
-    // 1. Calculate Current Inventory Value
-    const inventoryResult = await Product.aggregate([
+    // 1. Calculate Current Inventory Value (from StockBatch)
+    const inventoryResult = await StockBatch.aggregate([
       {
         $match: {
           owner: new mongoose.Types.ObjectId(userId),
-          isActive: true
+          isActive: true,
+          remainingQuantity: { $gt: 0 }
         }
       },
       {
         $group: {
           _id: null,
           totalValue: {
-            $sum: { $multiply: ['$quantity', '$buyingPrice'] }
+            $sum: { 
+              $multiply: ['$remainingQuantity', '$buyPrice'] 
+            }
+          },
+          totalQuantityInBase: {
+            $sum: '$remainingInBase'
           }
         }
       }
     ]);
 
     const inventoryValue = inventoryResult.length > 0 ? inventoryResult[0].totalValue : 0;
+    const totalStockInBase = inventoryResult.length > 0 ? inventoryResult[0].totalQuantityInBase : 0;
 
-    // 2. Calculate Weekly Sales
+    // 2. Calculate Weekly Sales (from multi-item Sale)
     const weekStart = new Date();
-    weekStart.setDate(weekStart.getDate() - weekStart.getDay()); // Start of week (Sunday)
+    weekStart.setDate(weekStart.getDate() - weekStart.getDay());
     weekStart.setHours(0, 0, 0, 0);
 
     const weekEnd = new Date(weekStart);
@@ -45,50 +55,57 @@ export const getDashboardStats = async (req, res) => {
           saleDate: {
             $gte: weekStart,
             $lt: weekEnd
-          }
+          },
+          isActive: true,
+          paymentStatus: { $ne: 'refunded' }
         }
       },
       {
         $group: {
           _id: null,
-          totalSales: {
-            $sum: { $multiply: ['$quantity', '$sellingPrice'] }
-          },
-          totalProfit: {
-            $sum: '$profit'
-          }
+          totalSales: { $sum: '$total' },
+          totalProfit: { $sum: '$totalProfit' },
+          totalDiscount: { $sum: '$discount' },
+          transactionCount: { $sum: 1 }
         }
       }
     ]);
 
     const weeklySales = weeklySalesResult.length > 0 ? weeklySalesResult[0].totalSales : 0;
     const weeklyGrossProfit = weeklySalesResult.length > 0 ? weeklySalesResult[0].totalProfit : 0;
+    const weeklyDiscount = weeklySalesResult.length > 0 ? weeklySalesResult[0].totalDiscount : 0;
+    const weeklyTransactions = weeklySalesResult.length > 0 ? weeklySalesResult[0].transactionCount : 0;
 
-    res.status(200).json({
-      success: true,
-      data: {
-        inventoryValue: inventoryValue,
-        weeklySales: weeklySales,
-        weeklyGrossProfit: weeklyGrossProfit,
-        currency: 'KES'
+    // 3. Calculate Monthly Sales (for comparison)
+    const monthStart = new Date();
+    monthStart.setDate(1);
+    monthStart.setHours(0, 0, 0, 0);
+
+    const monthlySalesResult = await Sale.aggregate([
+      {
+        $match: {
+          owner: new mongoose.Types.ObjectId(userId),
+          saleDate: {
+            $gte: monthStart
+          },
+          isActive: true,
+          paymentStatus: { $ne: 'refunded' }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          totalSales: { $sum: '$total' },
+          totalProfit: { $sum: '$totalProfit' }
+        }
       }
-    });
-  } catch (error) {
-    res.status(400).json({
-      success: false,
-      message: error.message
-    });
-  }
-};
+    ]);
 
-// @desc    Get inventory value only
-// @route   GET /api/dashboard/inventory-value
-// @access  Private
-export const getInventoryValue = async (req, res) => {
-  try {
-    const userId = req.user.id;
+    const monthlySales = monthlySalesResult.length > 0 ? monthlySalesResult[0].totalSales : 0;
+    const monthlyProfit = monthlySalesResult.length > 0 ? monthlySalesResult[0].totalProfit : 0;
 
-    const result = await Product.aggregate([
+    // 4. Get Low Stock Count
+    const lowStockProducts = await Product.aggregate([
       {
         $match: {
           owner: new mongoose.Types.ObjectId(userId),
@@ -96,21 +113,116 @@ export const getInventoryValue = async (req, res) => {
         }
       },
       {
+        $lookup: {
+          from: 'stockbatches',
+          localField: '_id',
+          foreignField: 'productId',
+          as: 'stock'
+        }
+      },
+      {
+        $addFields: {
+          totalStock: {
+            $sum: '$stock.remainingInBase'
+          }
+        }
+      },
+      {
+        $match: {
+          $expr: { $lte: ['$totalStock', '$minStockAlert'] }
+        }
+      },
+      {
+        $count: 'count'
+      }
+    ]);
+
+    const lowStockCount = lowStockProducts.length > 0 ? lowStockProducts[0].count : 0;
+
+    // 5. Get Out of Stock Count
+    const outOfStockProducts = await Product.aggregate([
+      {
+        $match: {
+          owner: new mongoose.Types.ObjectId(userId),
+          isActive: true
+        }
+      },
+      {
+        $lookup: {
+          from: 'stockbatches',
+          localField: '_id',
+          foreignField: 'productId',
+          as: 'stock'
+        }
+      },
+      {
+        $addFields: {
+          totalStock: {
+            $sum: '$stock.remainingInBase'
+          }
+        }
+      },
+      {
+        $match: {
+          $expr: { $eq: ['$totalStock', 0] }
+        }
+      },
+      {
+        $count: 'count'
+      }
+    ]);
+
+    const outOfStockCount = outOfStockProducts.length > 0 ? outOfStockProducts[0].count : 0;
+
+    // 6. Calculate Average Daily Sales (last 7 days)
+    const dailySales = await Sale.aggregate([
+      {
+        $match: {
+          owner: new mongoose.Types.ObjectId(userId),
+          saleDate: {
+            $gte: weekStart,
+            $lt: weekEnd
+          },
+          isActive: true,
+          paymentStatus: { $ne: 'refunded' }
+        }
+      },
+      {
+        $group: {
+          _id: {
+            $dateToString: { format: '%Y-%m-%d', date: '$saleDate' }
+          },
+          dayTotal: { $sum: '$total' },
+          dayProfit: { $sum: '$totalProfit' }
+        }
+      },
+      {
         $group: {
           _id: null,
-          totalValue: {
-            $sum: { $multiply: ['$quantity', '$buyingPrice'] }
-          }
+          averageDailySales: { $avg: '$dayTotal' },
+          averageDailyProfit: { $avg: '$dayProfit' }
         }
       }
     ]);
 
-    const inventoryValue = result.length > 0 ? result[0].totalValue : 0;
+    const averageDailySales = dailySales.length > 0 ? dailySales[0].averageDailySales : 0;
+    const averageDailyProfit = dailySales.length > 0 ? dailySales[0].averageDailyProfit : 0;
 
     res.status(200).json({
       success: true,
       data: {
         inventoryValue: inventoryValue,
+        totalStockInBase: totalStockInBase,
+        weeklySales: weeklySales,
+        weeklyGrossProfit: weeklyGrossProfit,
+        weeklyDiscount: weeklyDiscount,
+        weeklyTransactions: weeklyTransactions,
+        monthlySales: monthlySales,
+        monthlyProfit: monthlyProfit,
+        averageDailySales: averageDailySales,
+        averageDailyProfit: averageDailyProfit,
+        lowStockCount: lowStockCount,
+        outOfStockCount: outOfStockCount,
         currency: 'KES'
       }
     });
@@ -122,9 +234,133 @@ export const getInventoryValue = async (req, res) => {
   }
 };
 
-// @desc    Get weekly sales
+// ============================================================
+// @desc    Get inventory value
+// @route   GET /api/dashboard/inventory-value
+// @access  Private
+// ============================================================
+export const getInventoryValue = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    const result = await StockBatch.aggregate([
+      {
+        $match: {
+          owner: new mongoose.Types.ObjectId(userId),
+          isActive: true,
+          remainingQuantity: { $gt: 0 }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          totalValue: {
+            $sum: { $multiply: ['$remainingQuantity', '$buyPrice'] }
+          },
+          totalQuantityInBase: {
+            $sum: '$remainingInBase'
+          }
+        }
+      }
+    ]);
+
+    const inventoryValue = result.length > 0 ? result[0].totalValue : 0;
+    const totalQuantityInBase = result.length > 0 ? result[0].totalQuantityInBase : 0;
+
+    res.status(200).json({
+      success: true,
+      data: {
+        inventoryValue: inventoryValue,
+        totalQuantityInBase: totalQuantityInBase,
+        currency: 'KES'
+      }
+    });
+  } catch (error) {
+    res.status(400).json({
+      success: false,
+      message: error.message
+    });
+  }
+};
+
+// ============================================================
+// @desc    Get inventory value by product category
+// @route   GET /api/dashboard/inventory-by-category
+// @access  Private
+// ============================================================
+export const getInventoryByCategory = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    const result = await StockBatch.aggregate([
+      {
+        $match: {
+          owner: new mongoose.Types.ObjectId(userId),
+          isActive: true,
+          remainingQuantity: { $gt: 0 }
+        }
+      },
+      {
+        $lookup: {
+          from: 'products',
+          localField: 'productId',
+          foreignField: '_id',
+          as: 'product'
+        }
+      },
+      { $unwind: '$product' },
+      {
+        $group: {
+          _id: '$product.category',
+          totalValue: {
+            $sum: { $multiply: ['$remainingQuantity', '$buyPrice'] }
+          },
+          totalQuantity: {
+            $sum: '$remainingInBase'
+          },
+          productCount: { $addToSet: '$productId' }
+        }
+      },
+      {
+        $project: {
+          category: '$_id',
+          totalValue: 1,
+          totalQuantity: 1,
+          productCount: { $size: '$productCount' }
+        }
+      },
+      { $sort: { totalValue: -1 } }
+    ]);
+
+    const totalInventory = result.reduce((sum, item) => sum + item.totalValue, 0);
+
+    // Add percentage
+    const categoriesWithPercentage = result.map(item => ({
+      ...item,
+      percentage: totalInventory > 0 ? (item.totalValue / totalInventory) * 100 : 0
+    }));
+
+    res.status(200).json({
+      success: true,
+      data: {
+        categories: categoriesWithPercentage,
+        totalInventory: totalInventory,
+        currency: 'KES'
+      }
+    });
+  } catch (error) {
+    res.status(400).json({
+      success: false,
+      message: error.message
+    });
+  }
+};
+
+// ============================================================
+// @desc    Get weekly sales breakdown by day
 // @route   GET /api/dashboard/weekly-sales
 // @access  Private
+// ============================================================
 export const getWeeklySales = async (req, res) => {
   try {
     const userId = req.user.id;
@@ -136,32 +372,64 @@ export const getWeeklySales = async (req, res) => {
     const weekEnd = new Date(weekStart);
     weekEnd.setDate(weekEnd.getDate() + 7);
 
-    const result = await Sale.aggregate([
+    const dailyBreakdown = await Sale.aggregate([
       {
         $match: {
           owner: new mongoose.Types.ObjectId(userId),
           saleDate: {
             $gte: weekStart,
             $lt: weekEnd
-          }
+          },
+          isActive: true,
+          paymentStatus: { $ne: 'refunded' }
         }
       },
       {
         $group: {
-          _id: null,
-          totalSales: {
-            $sum: { $multiply: ['$quantity', '$sellingPrice'] }
-          }
+          _id: {
+            $dateToString: { format: '%Y-%m-%d', date: '$saleDate' }
+          },
+          day: { $first: '$saleDate' },
+          totalSales: { $sum: '$total' },
+          totalProfit: { $sum: '$totalProfit' },
+          transactionCount: { $sum: 1 }
         }
-      }
+      },
+      {
+        $project: {
+          date: '$_id',
+          dayOfWeek: { $dayOfWeek: '$day' },
+          totalSales: 1,
+          totalProfit: 1,
+          transactionCount: 1
+        }
+      },
+      { $sort: { date: 1 } }
     ]);
 
-    const weeklySales = result.length > 0 ? result[0].totalSales : 0;
+    // Fill in missing days with zero values
+    const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const filledBreakdown = days.map((day, index) => {
+      const dayData = dailyBreakdown.find(d => d.dayOfWeek === index + 1);
+      return {
+        day: day,
+        date: dayData ? dayData.date : null,
+        totalSales: dayData ? dayData.totalSales : 0,
+        totalProfit: dayData ? dayData.totalProfit : 0,
+        transactionCount: dayData ? dayData.transactionCount : 0
+      };
+    });
+
+    const totalWeeklySales = filledBreakdown.reduce((sum, d) => sum + d.totalSales, 0);
+    const totalWeeklyProfit = filledBreakdown.reduce((sum, d) => sum + d.totalProfit, 0);
 
     res.status(200).json({
       success: true,
       data: {
-        weeklySales: weeklySales,
+        breakdown: filledBreakdown,
+        totalSales: totalWeeklySales,
+        totalProfit: totalWeeklyProfit,
+        transactionCount: filledBreakdown.reduce((sum, d) => sum + d.transactionCount, 0),
         currency: 'KES'
       }
     });
@@ -173,9 +441,11 @@ export const getWeeklySales = async (req, res) => {
   }
 };
 
+// ============================================================
 // @desc    Get weekly gross profit
 // @route   GET /api/dashboard/weekly-profit
 // @access  Private
+// ============================================================
 export const getWeeklyGrossProfit = async (req, res) => {
   try {
     const userId = req.user.id;
@@ -194,25 +464,246 @@ export const getWeeklyGrossProfit = async (req, res) => {
           saleDate: {
             $gte: weekStart,
             $lt: weekEnd
-          }
+          },
+          isActive: true,
+          paymentStatus: { $ne: 'refunded' }
         }
       },
       {
         $group: {
           _id: null,
-          totalProfit: {
-            $sum: '$profit'
-          }
+          totalProfit: { $sum: '$totalProfit' },
+          totalSales: { $sum: '$total' },
+          totalCost: { $sum: { $subtract: ['$total', '$totalProfit'] } }
         }
       }
     ]);
 
     const weeklyGrossProfit = result.length > 0 ? result[0].totalProfit : 0;
+    const weeklySales = result.length > 0 ? result[0].totalSales : 0;
+    const weeklyCost = result.length > 0 ? result[0].totalCost : 0;
+    const profitMargin = weeklySales > 0 ? (weeklyGrossProfit / weeklySales) * 100 : 0;
 
     res.status(200).json({
       success: true,
       data: {
         weeklyGrossProfit: weeklyGrossProfit,
+        weeklySales: weeklySales,
+        weeklyCost: weeklyCost,
+        profitMargin: profitMargin,
+        currency: 'KES'
+      }
+    });
+  } catch (error) {
+    res.status(400).json({
+      success: false,
+      message: error.message
+    });
+  }
+};
+
+// ============================================================
+// @desc    Get monthly sales
+// @route   GET /api/dashboard/monthly-sales
+// @access  Private
+// ============================================================
+export const getMonthlySales = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { year, month } = req.query;
+
+    const targetYear = parseInt(year) || new Date().getFullYear();
+    const targetMonth = parseInt(month) || new Date().getMonth() + 1;
+
+    const startDate = new Date(targetYear, targetMonth - 1, 1);
+    const endDate = new Date(targetYear, targetMonth, 1);
+
+    const result = await Sale.aggregate([
+      {
+        $match: {
+          owner: new mongoose.Types.ObjectId(userId),
+          saleDate: {
+            $gte: startDate,
+            $lt: endDate
+          },
+          isActive: true,
+          paymentStatus: { $ne: 'refunded' }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          totalSales: { $sum: '$total' },
+          totalProfit: { $sum: '$totalProfit' },
+          totalDiscount: { $sum: '$discount' },
+          transactionCount: { $sum: 1 }
+        }
+      }
+    ]);
+
+    const monthlySales = result.length > 0 ? result[0].totalSales : 0;
+    const monthlyProfit = result.length > 0 ? result[0].totalProfit : 0;
+    const monthlyDiscount = result.length > 0 ? result[0].totalDiscount : 0;
+    const monthlyTransactions = result.length > 0 ? result[0].transactionCount : 0;
+
+    res.status(200).json({
+      success: true,
+      data: {
+        year: targetYear,
+        month: targetMonth,
+        totalSales: monthlySales,
+        totalProfit: monthlyProfit,
+        totalDiscount: monthlyDiscount,
+        transactionCount: monthlyTransactions,
+        currency: 'KES'
+      }
+    });
+  } catch (error) {
+    res.status(400).json({
+      success: false,
+      message: error.message
+    });
+  }
+};
+
+// ============================================================
+// @desc    Get top selling products
+// @route   GET /api/dashboard/top-products
+// @access  Private
+// ============================================================
+export const getTopProducts = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { limit = 10, days = 30 } = req.query;
+
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - parseInt(days));
+    startDate.setHours(0, 0, 0, 0);
+
+    const result = await Sale.aggregate([
+      {
+        $match: {
+          owner: new mongoose.Types.ObjectId(userId),
+          saleDate: { $gte: startDate },
+          isActive: true,
+          paymentStatus: { $ne: 'refunded' }
+        }
+      },
+      { $unwind: '$items' },
+      {
+        $group: {
+          _id: '$items.productId',
+          productName: { $first: '$items.productName' },
+          totalQuantitySold: { $sum: '$items.quantityInBase' },
+          totalRevenue: { $sum: '$items.totalPrice' },
+          totalProfit: { $sum: '$items.profit' },
+          transactionCount: { $sum: 1 }
+        }
+      },
+      { $sort: { totalRevenue: -1 } },
+      { $limit: parseInt(limit) },
+      {
+        $lookup: {
+          from: 'products',
+          localField: '_id',
+          foreignField: '_id',
+          as: 'product'
+        }
+      },
+      { $unwind: { path: '$product', preserveNullAndEmptyArrays: true } },
+      {
+        $project: {
+          productId: '$_id',
+          productName: 1,
+          category: '$product.category',
+          totalQuantitySold: 1,
+          totalRevenue: 1,
+          totalProfit: 1,
+          transactionCount: 1,
+          profitMargin: {
+            $cond: [
+              { $gt: ['$totalRevenue', 0] },
+              { $multiply: [{ $divide: ['$totalProfit', '$totalRevenue'] }, 100] },
+              0
+            ]
+          }
+        }
+      }
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data: result,
+      currency: 'KES'
+    });
+  } catch (error) {
+    res.status(400).json({
+      success: false,
+      message: error.message
+    });
+  }
+};
+
+// ============================================================
+// @desc    Get sales summary for a date range
+// @route   POST /api/dashboard/sales-summary
+// @access  Private
+// ============================================================
+export const getSalesSummary = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { startDate, endDate } = req.body;
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide startDate and endDate'
+      });
+    }
+
+    const start = new Date(startDate);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(endDate);
+    end.setHours(23, 59, 59, 999);
+
+    const result = await Sale.aggregate([
+      {
+        $match: {
+          owner: new mongoose.Types.ObjectId(userId),
+          saleDate: {
+            $gte: start,
+            $lte: end
+          },
+          isActive: true,
+          paymentStatus: { $ne: 'refunded' }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          totalSales: { $sum: '$total' },
+          totalProfit: { $sum: '$totalProfit' },
+          totalDiscount: { $sum: '$discount' },
+          transactionCount: { $sum: 1 },
+          averageTransactionValue: { $avg: '$total' }
+        }
+      }
+    ]);
+
+    const summary = result.length > 0 ? result[0] : {
+      totalSales: 0,
+      totalProfit: 0,
+      totalDiscount: 0,
+      transactionCount: 0,
+      averageTransactionValue: 0
+    };
+
+    res.status(200).json({
+      success: true,
+      data: {
+        ...summary,
+        startDate: start,
+        endDate: end,
         currency: 'KES'
       }
     });
