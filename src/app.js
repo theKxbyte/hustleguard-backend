@@ -26,6 +26,7 @@ const corsOptions = {
     const allowedOrigins = [
       'https://hustleguard-web.vercel.app',
       'http://localhost:3000',
+      'hustleguard.jreedtechgroup.co.ke',
       'http://localhost:5173',
     ];
     
