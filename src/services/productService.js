@@ -7,25 +7,21 @@ import mongoose from 'mongoose';
 // Create product with UOM configuration
 // ============================================================
 export const createProduct = async (productData, userId) => {
-  // Validate UOM configuration
   if (!productData.baseUnit || !productData.baseUnit.name) {
     throw new Error('Base unit is required');
   }
 
-  // Validate sell units
   if (productData.sellUnits && productData.sellUnits.length > 0) {
     for (const unit of productData.sellUnits) {
       if (!unit.name || !unit.conversion || unit.conversion <= 0) {
         throw new Error(`Invalid sell unit: ${unit.name || 'unnamed'}`);
       }
-      // Ensure base unit exists in sell units
       if (unit.isBase && unit.name !== productData.baseUnit.name) {
         throw new Error(`Base unit "${productData.baseUnit.name}" must match the base unit in sell units`);
       }
     }
   }
 
-  // Validate stock units
   if (productData.stockUnits && productData.stockUnits.length > 0) {
     for (const unit of productData.stockUnits) {
       if (!unit.name || !unit.conversion || unit.conversion <= 0) {
@@ -34,7 +30,6 @@ export const createProduct = async (productData, userId) => {
     }
   }
 
-  // Ensure base unit is in sellUnits if not provided
   if (productData.sellUnits && productData.sellUnits.length > 0) {
     const hasBase = productData.sellUnits.some(u => u.isBase);
     if (!hasBase) {
@@ -49,7 +44,6 @@ export const createProduct = async (productData, userId) => {
     }
   }
 
-  // Ensure base unit is in stockUnits if not provided
   if (productData.stockUnits && productData.stockUnits.length > 0) {
     const hasBase = productData.stockUnits.some(u => u.isBase);
     if (!hasBase) {
@@ -64,7 +58,6 @@ export const createProduct = async (productData, userId) => {
     }
   }
 
-  // Set legacy fields for backward compatibility
   const baseSellUnit = productData.sellUnits?.find(u => u.isBase) || 
                        productData.sellUnits?.[0];
   const baseStockUnit = productData.stockUnits?.find(u => u.isBase) || 
@@ -72,11 +65,10 @@ export const createProduct = async (productData, userId) => {
 
   const product = await Product.create({
     ...productData,
-    // Legacy fields
     unit: productData.baseUnit.name,
     buyingPrice: baseStockUnit?.buyPrice || 0,
     sellingPrice: baseSellUnit?.sellPrice || 0,
-    quantity: 0, // Stock is tracked in StockBatch
+    quantity: 0,
     owner: userId
   });
 
@@ -97,7 +89,6 @@ export const getProducts = async (userId, filters = {}) => {
     query.isActive = filters.isActive;
   }
 
-  // Search by name or barcode
   if (filters.search) {
     const searchTerm = filters.search.trim();
     query.$or = [
@@ -111,11 +102,9 @@ export const getProducts = async (userId, filters = {}) => {
     .sort({ createdAt: -1 })
     .lean();
 
-  // Get stock info for all products
   const productIds = products.map(p => p._id);
   const stockData = await getStockForProducts(productIds, userId);
 
-  // Enrich products with stock info
   const enrichedProducts = products.map(product => {
     const stock = stockData[product._id.toString()] || { totalInBase: 0, batches: [] };
     return {
@@ -147,10 +136,8 @@ export const getProductById = async (productId, userId, includeStock = true) => 
     return product;
   }
 
-  // Get stock info
   const stock = await getStockForProduct(productId, userId);
   
-  // Get sell units with availability
   const sellUnitsWithStock = product.sellUnits?.map(unit => {
     const availableInUnit = stock.totalInBase / unit.conversion;
     return {
@@ -184,7 +171,6 @@ export const updateProduct = async (productId, userId, updateData) => {
     throw new Error('Product not found');
   }
 
-  // Validate UOM updates
   if (updateData.sellUnits) {
     for (const unit of updateData.sellUnits) {
       if (!unit.name || !unit.conversion || unit.conversion <= 0) {
@@ -201,9 +187,7 @@ export const updateProduct = async (productId, userId, updateData) => {
     }
   }
 
-  // If base unit changes, validate
   if (updateData.baseUnit && updateData.baseUnit.name !== product.baseUnit.name) {
-    // Check if any stock exists in old base unit
     const stockCheck = await StockBatch.findOne({
       productId: product._id,
       owner: userId,
@@ -214,7 +198,6 @@ export const updateProduct = async (productId, userId, updateData) => {
     }
   }
 
-  // Update legacy fields if needed
   if (updateData.sellUnits) {
     const baseSellUnit = updateData.sellUnits.find(u => u.isBase);
     if (baseSellUnit && baseSellUnit.sellPrice !== undefined) {
@@ -247,7 +230,7 @@ export const updateProduct = async (productId, userId, updateData) => {
 };
 
 // ============================================================
-// Delete product (check if stock exists)
+// Delete product - FORCE DELETE (removes product + all stock)
 // ============================================================
 export const deleteProduct = async (productId, userId) => {
   const product = await Product.findOne({
@@ -259,22 +242,16 @@ export const deleteProduct = async (productId, userId) => {
     throw new Error('Product not found');
   }
 
-  // Check if there's any stock remaining
-  const stockCheck = await StockBatch.findOne({
+  // Delete all stock batches
+  await StockBatch.deleteMany({
     productId: product._id,
-    owner: userId,
-    remainingQuantity: { $gt: 0 }
+    owner: userId
   });
 
-  if (stockCheck) {
-    throw new Error('Cannot delete product with existing stock. Please sell or remove all stock first.');
-  }
+  // Delete the product
+  await product.deleteOne();
 
-  // Soft delete by setting isActive to false
-  product.isActive = false;
-  await product.save();
-
-  return { message: 'Product deactivated successfully' };
+  return { message: 'Product and all stock deleted' };
 };
 
 // ============================================================
@@ -375,7 +352,6 @@ export const addStock = async (data) => {
     throw new Error('Product not found');
   }
 
-  // Find the stock unit
   const stockUnit = product.stockUnits.find(u => u.name === unitName && u.isActive !== false);
   if (!stockUnit) {
     throw new Error(`Unit "${unitName}" not found in product's stock units`);
@@ -384,7 +360,6 @@ export const addStock = async (data) => {
   const quantityInBase = quantity * stockUnit.conversion;
   const totalCost = quantity * buyPrice;
 
-  // Create stock batch
   const stockBatch = await StockBatch.create({
     productId: product._id,
     unit: {
@@ -404,7 +379,6 @@ export const addStock = async (data) => {
     owner: ownerId
   });
 
-  // Update legacy product quantity for backward compatibility
   const totalStock = await getTotalStockForProduct(productId, ownerId);
   product.quantity = totalStock;
   product.lastRestockDate = new Date();
@@ -429,7 +403,6 @@ export const getProductStock = async (productId, userId) => {
 
   const stock = await getStockForProduct(productId, userId);
 
-  // Get stock by unit type
   const stockByUnit = {};
   stock.batches.forEach(batch => {
     const key = batch.unit.name;
@@ -472,7 +445,6 @@ export const convertStock = async (data) => {
     throw new Error('Product not found');
   }
 
-  // Find units
   const fromStockUnit = product.stockUnits.find(u => u.name === fromUnit && u.isActive !== false);
   const toStockUnit = product.stockUnits.find(u => u.name === toUnit && u.isActive !== false);
 
@@ -486,14 +458,13 @@ export const convertStock = async (data) => {
   const fromQuantityInBase = quantity * fromStockUnit.conversion;
   const toQuantity = fromQuantityInBase / toStockUnit.conversion;
 
-  // Check if we have enough stock in source unit
   const sourceBatches = await StockBatch.find({
     productId: product._id,
     owner: ownerId,
     'unit.name': fromUnit,
     remainingQuantity: { $gt: 0 },
     isActive: true
-  }).sort({ createdAt: 1 }); // FIFO
+  }).sort({ createdAt: 1 });
 
   let totalAvailable = 0;
   for (const batch of sourceBatches) {
@@ -504,7 +475,6 @@ export const convertStock = async (data) => {
     throw new Error(`Insufficient stock in ${fromUnit}. Available: ${totalAvailable}, Required: ${quantity}`);
   }
 
-  // Deduct from source (FIFO)
   let remainingToDeduct = quantity;
   const deductions = [];
 
@@ -527,8 +497,6 @@ export const convertStock = async (data) => {
     remainingToDeduct -= deductQuantity;
   }
 
-  // Add to target unit (single batch)
-  // Calculate average cost from source
   let totalCost = 0;
   for (const deduction of deductions) {
     const batch = sourceBatches.find(b => b._id.toString() === deduction.batchId.toString());
@@ -556,7 +524,6 @@ export const convertStock = async (data) => {
     owner: ownerId
   });
 
-  // Update legacy product quantity
   const totalStock = await getTotalStockForProduct(productId, ownerId);
   product.quantity = totalStock;
   await product.save();
@@ -594,7 +561,6 @@ export const getProductByBarcode = async (barcode, userId) => {
     return null;
   }
 
-  // Find which unit has this barcode
   let matchedUnit = null;
   let unitType = null;
 
@@ -662,8 +628,51 @@ export const getStockAlerts = async (userId) => {
 };
 
 // ============================================================
-// Helper: Get stock for a single product
+// Delete stock batch
 // ============================================================
+export const deleteStockBatch = async (data) => {
+  const { productId, batchId, ownerId } = data;
+
+  const batch = await StockBatch.findOne({
+    _id: batchId,
+    productId: productId,
+    owner: ownerId
+  });
+
+  if (!batch) {
+    throw new Error('Stock batch not found');
+  }
+
+  batch.isActive = false;
+  await batch.save();
+
+  const totalStock = await StockBatch.aggregate([
+    {
+      $match: {
+        productId: new mongoose.Types.ObjectId(productId),
+        owner: ownerId,
+        isActive: true,
+        remainingQuantity: { $gt: 0 }
+      }
+    },
+    {
+      $group: {
+        _id: null,
+        total: { $sum: '$remainingInBase' }
+      }
+    }
+  ]);
+
+  const quantity = totalStock.length > 0 ? totalStock[0].total : 0;
+  await Product.findByIdAndUpdate(productId, { quantity });
+
+  return { message: 'Stock batch deleted successfully' };
+};
+
+// ============================================================
+// Helpers
+// ============================================================
+
 const getStockForProduct = async (productId, userId) => {
   const result = await StockBatch.aggregate([
     {
@@ -699,9 +708,6 @@ const getStockForProduct = async (productId, userId) => {
   return result.length > 0 ? result[0] : { totalInBase: 0, batches: [] };
 };
 
-// ============================================================
-// Helper: Get stock for multiple products
-// ============================================================
 const getStockForProducts = async (productIds, userId) => {
   if (!productIds || productIds.length === 0) return {};
 
@@ -743,9 +749,6 @@ const getStockForProducts = async (productIds, userId) => {
   return stockMap;
 };
 
-// ============================================================
-// Helper: Get total stock for a product (legacy support)
-// ============================================================
 const getTotalStockForProduct = async (productId, userId) => {
   const result = await StockBatch.aggregate([
     {
@@ -767,9 +770,6 @@ const getTotalStockForProduct = async (productId, userId) => {
   return result.length > 0 ? result[0].total : 0;
 };
 
-// ============================================================
-// Helper: Get expiring stock
-// ============================================================
 const getExpiringStock = async (userId, days = 30) => {
   const expiryThreshold = new Date();
   expiryThreshold.setDate(expiryThreshold.getDate() + days);

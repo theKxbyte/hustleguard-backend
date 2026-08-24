@@ -1,5 +1,8 @@
 // controllers/productController.js
 import * as productService from '../services/productService.js';
+import StockBatch from '../models/StockBatch.js';
+import Product from '../models/Product.js';
+import mongoose from 'mongoose';
 
 // ============================================================
 // @desc    Create product with UOM configuration
@@ -318,6 +321,102 @@ export const getStockAlerts = async (req, res) => {
       success: true,
       data: alerts
     });
+  } catch (error) {
+    res.status(400).json({
+      success: false,
+      message: error.message
+    });
+  }
+};
+
+// ============================================================
+// @desc    Delete stock batch
+// @route   DELETE /api/products/:productId/stock/:batchId
+// @access  Private
+// ============================================================
+export const deleteStockBatch = async (req, res) => {
+  try {
+    const { productId, batchId } = req.params;
+    const userId = req.user.id;
+
+    const result = await productService.deleteStockBatch({
+      productId,
+      batchId,
+      ownerId: userId
+    });
+
+    res.status(200).json({
+      success: true,
+      data: result
+    });
+  } catch (error) {
+    res.status(404).json({
+      success: false,
+      message: error.message
+    });
+  }
+};
+
+// controllers/productController.js
+export const updateStockBatch = async (req, res) => {
+  try {
+    const { productId, batchId } = req.params;
+    const { quantity } = req.body;
+    const userId = req.user.id;
+
+    if (quantity === undefined || quantity < 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide a valid quantity (0 or greater)'
+      });
+    }
+
+    const batch = await StockBatch.findOne({
+      _id: batchId,
+      productId: productId,
+      owner: userId
+    });
+
+    if (!batch) {
+      return res.status(404).json({
+        success: false,
+        message: 'Stock batch not found'
+      });
+    }
+
+    // Update quantity
+    const conversion = batch.unit.conversion || 1;
+    batch.remainingQuantity = quantity;
+    batch.remainingInBase = quantity * conversion;
+    await batch.save();
+
+    // Update product quantity
+    const totalStock = await StockBatch.aggregate([
+      {
+        $match: {
+          productId: new mongoose.Types.ObjectId(productId),
+          owner: userId,
+          isActive: true,
+          remainingQuantity: { $gt: 0 }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: '$remainingInBase' }
+        }
+      }
+    ]);
+
+    await Product.findByIdAndUpdate(productId, { 
+      quantity: totalStock.length > 0 ? totalStock[0].total : 0 
+    });
+
+    res.status(200).json({
+      success: true,
+      data: { message: 'Stock quantity updated successfully' }
+    });
+
   } catch (error) {
     res.status(400).json({
       success: false,

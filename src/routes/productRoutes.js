@@ -14,8 +14,12 @@ import {
   convertStock,
   getProductByBarcode,
   bulkCreateProducts,
-  getStockAlerts
+  getStockAlerts,
+  deleteStockBatch,
+  updateStockBatch
 } from '../controllers/productController.js';
+
+
 
 const router = express.Router();
 
@@ -47,8 +51,13 @@ router.post('/bulk', bulkCreateProducts);
 
 // GET /api/products/:id/stock - Get product stock breakdown
 // POST /api/products/:id/stock - Add stock to product
+router.put('/:productId/stock/:batchId', updateStockBatch);
+
 router.get('/:id/stock', getProductStock);
 router.post('/:id/stock', addProductStock);
+
+// DELETE /api/products/:productId/stock/:batchId - Delete stock batch
+router.delete('/:productId/stock/:batchId', deleteStockBatch);
 
 // POST /api/products/:id/convert - Convert stock between units
 router.post('/:id/convert', convertStock);
