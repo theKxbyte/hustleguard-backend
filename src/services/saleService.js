@@ -1,4 +1,4 @@
-// services/saleService.js - UPDATED with UOM + Multi-item Support
+// services/saleService.js - UPDATED with UOM + Multi-item Support + Loose Quantity
 import Sale from '../models/Sale.js';
 import Product from '../models/Product.js';
 import StockBatch from '../models/StockBatch.js';
@@ -9,7 +9,7 @@ import mongoose from 'mongoose';
 // ============================================================
 export const recordSale = async (saleData, userId) => {
   const {
-    items,           // Array of { productId, unitName, quantity, unitPrice? }
+    items,
     customer,
     customerPhone,
     customerEmail,
@@ -33,11 +33,9 @@ export const recordSale = async (saleData, userId) => {
   let totalProfit = 0;
   const stockDeductions = [];
 
-  // Process each item
   for (const item of items) {
     const { productId, unitName, quantity } = item;
 
-    // Get product
     const product = await Product.findOne({
       _id: productId,
       owner: userId,
@@ -48,13 +46,11 @@ export const recordSale = async (saleData, userId) => {
       throw new Error(`Product not found: ${productId}`);
     }
 
-    // Find the sell unit
     const sellUnit = product.sellUnits?.find(u => u.name === unitName && u.isActive !== false);
     if (!sellUnit) {
       throw new Error(`Unit "${unitName}" not found for product "${product.name}"`);
     }
 
-    // Check stock
     const stock = await getStockForProduct(productId, userId);
     const requestedInBase = quantity * sellUnit.conversion;
 
@@ -66,17 +62,14 @@ export const recordSale = async (saleData, userId) => {
       );
     }
 
-    // Calculate prices
     const unitPrice = item.unitPrice || sellUnit.sellPrice || 0;
     const totalPrice = quantity * unitPrice;
 
-    // Calculate cost (FIFO)
     const costInfo = await calculateCost(productId, userId, requestedInBase);
     const totalCost = costInfo.totalCost;
     const costPerBaseUnit = costInfo.averageCost;
     const profit = totalPrice - totalCost;
 
-    // Deduct stock (FIFO)
     const deductions = await deductStockFIFO(
       productId,
       userId,
@@ -84,7 +77,9 @@ export const recordSale = async (saleData, userId) => {
       sellUnit
     );
 
-    // Build sale item
+    // Auto-convert loose to bundles after deduction
+    await autoConvertLooseToBundles(productId, userId);
+
     const saleItem = {
       productId: product._id,
       productName: product.name,
@@ -112,7 +107,6 @@ export const recordSale = async (saleData, userId) => {
     console.log(`✅ ${product.name}: ${quantity} ${sellUnit.label} sold (${requestedInBase} ${product.baseUnit.label})`);
   }
 
-  // Calculate totals
   let totalAfterDiscount = subtotal;
   if (discount > 0) {
     if (discountType === 'percentage') {
@@ -126,7 +120,6 @@ export const recordSale = async (saleData, userId) => {
   const tax = (totalAfterDiscount * taxRate) / 100;
   const total = totalAfterDiscount + tax;
 
-  // Create sale
   const sale = await Sale.create({
     items: saleItems,
     subtotal: subtotal,
@@ -149,7 +142,6 @@ export const recordSale = async (saleData, userId) => {
     saleDate: new Date()
   });
 
-  // Update product legacy quantities
   for (const item of saleItems) {
     const totalStock = await getTotalStockForProduct(item.productId, userId);
     await Product.findByIdAndUpdate(
@@ -169,30 +161,21 @@ export const recordSale = async (saleData, userId) => {
 export const getSales = async (userId, filters = {}) => {
   const query = { owner: userId };
 
-  // Date filters
   if (filters.startDate) {
     query.saleDate = { ...query.saleDate, $gte: new Date(filters.startDate) };
   }
   if (filters.endDate) {
     query.saleDate = { ...query.saleDate, $lte: new Date(filters.endDate) };
   }
-
-  // Product filter (search in items)
   if (filters.productId) {
     query['items.productId'] = filters.productId;
   }
-
-  // Payment status
   if (filters.paymentStatus) {
     query.paymentStatus = filters.paymentStatus;
   }
-
-  // Invoice number
   if (filters.invoiceNumber) {
     query.invoiceNumber = filters.invoiceNumber;
   }
-
-  // Customer
   if (filters.customer) {
     query.customer = { $regex: filters.customer, $options: 'i' };
   }
@@ -244,7 +227,6 @@ export const getSaleByInvoice = async (invoiceNumber, userId) => {
 export const getDailySales = async (userId, date) => {
   const startOfDay = new Date(date || Date.now());
   startOfDay.setHours(0, 0, 0, 0);
-
   const endOfDay = new Date(startOfDay);
   endOfDay.setHours(23, 59, 59, 999);
 
@@ -279,7 +261,6 @@ export const getSalesStats = async (userId) => {
   const firstOfWeek = new Date(today);
   firstOfWeek.setDate(today.getDate() - today.getDay());
 
-  // Today's sales
   const todaySales = await Sale.find({
     owner: userId,
     saleDate: { $gte: today },
@@ -287,7 +268,6 @@ export const getSalesStats = async (userId) => {
     paymentStatus: { $ne: 'refunded' }
   });
 
-  // Week sales
   const weekSales = await Sale.find({
     owner: userId,
     saleDate: { $gte: firstOfWeek },
@@ -295,7 +275,6 @@ export const getSalesStats = async (userId) => {
     paymentStatus: { $ne: 'refunded' }
   });
 
-  // Month sales
   const monthSales = await Sale.find({
     owner: userId,
     saleDate: { $gte: firstOfMonth },
@@ -303,7 +282,6 @@ export const getSalesStats = async (userId) => {
     paymentStatus: { $ne: 'refunded' }
   });
 
-  // Top selling products
   const topProducts = await Sale.aggregate([
     { $match: { owner: new mongoose.Types.ObjectId(userId), isActive: true } },
     { $unwind: '$items' },
@@ -330,7 +308,6 @@ export const getSalesStats = async (userId) => {
     { $unwind: { path: '$product', preserveNullAndEmptyArrays: true } }
   ]);
 
-  // Payment method breakdown
   const paymentBreakdown = await Sale.aggregate([
     {
       $match: {
@@ -382,27 +359,26 @@ export const deleteSale = async (saleId, userId) => {
     throw new Error('Sale not found');
   }
 
-  // Restore stock for each item
   for (const item of sale.items) {
-    // Find the stock unit that was used
-    const unitName = item.unitSold.name;
-    
-    // Restore using the stock deductions
     if (item.stockDeductions && item.stockDeductions.length > 0) {
       for (const deduction of item.stockDeductions) {
         const batch = await StockBatch.findById(deduction.batchId);
         if (batch) {
-          batch.remainingQuantity += deduction.quantityDeducted;
-          batch.remainingInBase += deduction.quantityInBaseDeducted;
+          // Restore to the correct field based on source
+          if (deduction.source === 'loose') {
+            batch.remainingLoose += deduction.quantityDeducted;
+            batch.remainingLooseInBase += deduction.quantityInBaseDeducted;
+          } else {
+            batch.remainingQuantity += deduction.quantityDeducted;
+            batch.remainingInBase += deduction.quantityInBaseDeducted;
+          }
           await batch.save();
         }
       }
     } else {
-      // Fallback: restore to stock batch
       await restoreStockFallback(item, userId);
     }
 
-    // Update product legacy quantity
     const totalStock = await getTotalStockForProduct(item.productId, userId);
     await Product.findByIdAndUpdate(
       item.productId,
@@ -410,7 +386,6 @@ export const deleteSale = async (saleId, userId) => {
     );
   }
 
-  // Soft delete the sale
   sale.isActive = false;
   await sale.save();
 
@@ -513,7 +488,6 @@ export const getSalesSummary = async (userId, startDate, endDate) => {
     }
   ]);
 
-  // Get daily breakdown
   const dailyBreakdown = await Sale.aggregate([
     {
       $match: {
@@ -552,7 +526,7 @@ export const getSalesSummary = async (userId, startDate, endDate) => {
 };
 
 // ============================================================
-// Helper: Get stock for a product
+// HELPER: Get stock for a product (includes loose)
 // ============================================================
 const getStockForProduct = async (productId, userId) => {
   const result = await StockBatch.aggregate([
@@ -561,19 +535,25 @@ const getStockForProduct = async (productId, userId) => {
         productId: new mongoose.Types.ObjectId(productId),
         owner: new mongoose.Types.ObjectId(userId),
         isActive: true,
-        remainingQuantity: { $gt: 0 }
+        $or: [
+          { remainingQuantity: { $gt: 0 } },
+          { remainingLoose: { $gt: 0 } }
+        ]
       }
     },
     {
       $group: {
         _id: null,
-        totalInBase: { $sum: '$remainingInBase' },
+        totalInBase: { $sum: { $add: ['$remainingInBase', '$remainingLooseInBase'] } },
         batches: {
           $push: {
             _id: '$_id',
             unit: '$unit',
             remainingQuantity: '$remainingQuantity',
             remainingInBase: '$remainingInBase',
+            remainingLoose: '$remainingLoose',
+            remainingLooseInBase: '$remainingLooseInBase',
+            bundleSize: '$bundleSize',
             buyPrice: '$buyPrice'
           }
         }
@@ -585,15 +565,18 @@ const getStockForProduct = async (productId, userId) => {
 };
 
 // ============================================================
-// Helper: Calculate cost using FIFO
+// HELPER: Calculate cost using FIFO (includes loose)
 // ============================================================
 const calculateCost = async (productId, userId, quantityInBase) => {
   const batches = await StockBatch.find({
     productId: productId,
     owner: userId,
     isActive: true,
-    remainingQuantity: { $gt: 0 }
-  }).sort({ createdAt: 1 }); // FIFO
+    $or: [
+      { remainingQuantity: { $gt: 0 } },
+      { remainingLoose: { $gt: 0 } }
+    ]
+  }).sort({ createdAt: 1 });
 
   let remaining = quantityInBase;
   let totalCost = 0;
@@ -602,19 +585,43 @@ const calculateCost = async (productId, userId, quantityInBase) => {
   for (const batch of batches) {
     if (remaining <= 0) break;
 
-    const availableInBase = batch.remainingInBase;
-    const usedInBase = Math.min(remaining, availableInBase);
-    const costPerBase = batch.buyPrice / batch.unit.conversion;
-    const cost = usedInBase * costPerBase;
+    // Check loose first
+    let availableInBase = batch.remainingLooseInBase || 0;
+    if (availableInBase > 0) {
+      const usedInBase = Math.min(remaining, availableInBase);
+      const costPerBase = batch.buyPrice / batch.unit.conversion;
+      const cost = usedInBase * costPerBase;
 
-    totalCost += cost;
-    remaining -= usedInBase;
+      totalCost += cost;
+      remaining -= usedInBase;
 
-    usedBatches.push({
-      batchId: batch._id,
-      usedInBase: usedInBase,
-      cost: cost
-    });
+      usedBatches.push({
+        batchId: batch._id,
+        usedInBase: usedInBase,
+        cost: cost,
+        source: 'loose'
+      });
+    }
+
+    // Then bundles
+    if (remaining > 0) {
+      availableInBase = batch.remainingInBase || 0;
+      if (availableInBase > 0) {
+        const usedInBase = Math.min(remaining, availableInBase);
+        const costPerBase = batch.buyPrice / batch.unit.conversion;
+        const cost = usedInBase * costPerBase;
+
+        totalCost += cost;
+        remaining -= usedInBase;
+
+        usedBatches.push({
+          batchId: batch._id,
+          usedInBase: usedInBase,
+          cost: cost,
+          source: 'bundle'
+        });
+      }
+    }
   }
 
   if (remaining > 0) {
@@ -629,15 +636,18 @@ const calculateCost = async (productId, userId, quantityInBase) => {
 };
 
 // ============================================================
-// Helper: Deduct stock using FIFO
+// HELPER: Deduct stock using FIFO (loose first, then bundles)
 // ============================================================
 const deductStockFIFO = async (productId, userId, quantityInBase, sellUnit) => {
   const batches = await StockBatch.find({
     productId: productId,
     owner: userId,
     isActive: true,
-    remainingQuantity: { $gt: 0 }
-  }).sort({ createdAt: 1 }); // FIFO
+    $or: [
+      { remainingQuantity: { $gt: 0 } },
+      { remainingLoose: { $gt: 0 } }
+    ]
+  }).sort({ createdAt: 1 });
 
   let remaining = quantityInBase;
   const deductions = [];
@@ -645,22 +655,49 @@ const deductStockFIFO = async (productId, userId, quantityInBase, sellUnit) => {
   for (const batch of batches) {
     if (remaining <= 0) break;
 
-    const availableInBase = batch.remainingInBase;
-    const usedInBase = Math.min(remaining, availableInBase);
-    const usedInUnit = usedInBase / sellUnit.conversion;
+    // STEP 1: Deduct from loose first
+    if (batch.remainingLoose > 0) {
+      const availableInBase = batch.remainingLooseInBase || 0;
+      const usedInBase = Math.min(remaining, availableInBase);
+      const usedInUnit = usedInBase / sellUnit.conversion;
 
-    batch.remainingQuantity -= usedInUnit;
-    batch.remainingInBase -= usedInBase;
-    await batch.save();
+      // Deduct loose
+      batch.remainingLoose -= usedInUnit;
+      batch.remainingLooseInBase -= usedInBase;
+      await batch.save();
 
-    deductions.push({
-      batchId: batch._id,
-      unitName: batch.unit.name,
-      quantityDeducted: usedInUnit,
-      quantityInBaseDeducted: usedInBase
-    });
+      deductions.push({
+        batchId: batch._id,
+        unitName: batch.unit.name,
+        quantityDeducted: usedInUnit,
+        quantityInBaseDeducted: usedInBase,
+        source: 'loose'
+      });
 
-    remaining -= usedInBase;
+      remaining -= usedInBase;
+    }
+
+    // STEP 2: Deduct from bundles if still needed
+    if (remaining > 0 && batch.remainingQuantity > 0) {
+      const availableInBase = batch.remainingInBase || 0;
+      const usedInBase = Math.min(remaining, availableInBase);
+      const usedInUnit = usedInBase / sellUnit.conversion;
+
+      // Deduct bundles
+      batch.remainingQuantity -= usedInUnit;
+      batch.remainingInBase -= usedInBase;
+      await batch.save();
+
+      deductions.push({
+        batchId: batch._id,
+        unitName: batch.unit.name,
+        quantityDeducted: usedInUnit,
+        quantityInBaseDeducted: usedInBase,
+        source: 'bundle'
+      });
+
+      remaining -= usedInBase;
+    }
   }
 
   if (remaining > 0) {
@@ -671,7 +708,46 @@ const deductStockFIFO = async (productId, userId, quantityInBase, sellUnit) => {
 };
 
 // ============================================================
-// Helper: Get total stock for product (legacy)
+// HELPER: Auto-convert loose to bundles
+// ============================================================
+const autoConvertLooseToBundles = async (productId, userId) => {
+  const batches = await StockBatch.find({
+    productId: productId,
+    owner: userId,
+    isActive: true,
+    bundleSize: { $gt: 0 },
+    remainingLoose: { $gt: 0 }
+  });
+
+  let totalConverted = 0;
+
+  for (const batch of batches) {
+    while (batch.remainingLoose >= batch.bundleSize) {
+      const bundlesToAdd = Math.floor(batch.remainingLoose / batch.bundleSize);
+      const looseRemaining = batch.remainingLoose % batch.bundleSize;
+
+      // Add to bundles
+      batch.remainingQuantity += bundlesToAdd;
+      batch.remainingInBase += bundlesToAdd * batch.bundleSize * batch.unit.conversion;
+
+      // Remove from loose
+      batch.remainingLoose = looseRemaining;
+      batch.remainingLooseInBase = looseRemaining * batch.unit.conversion;
+
+      await batch.save();
+      totalConverted += bundlesToAdd;
+    }
+  }
+
+  if (totalConverted > 0) {
+    console.log(`🔄 Auto-converted ${totalConverted} loose units to bundles for product ${productId}`);
+  }
+
+  return { converted: totalConverted };
+};
+
+// ============================================================
+// HELPER: Get total stock for product (legacy - includes loose)
 // ============================================================
 const getTotalStockForProduct = async (productId, userId) => {
   const result = await StockBatch.aggregate([
@@ -680,13 +756,16 @@ const getTotalStockForProduct = async (productId, userId) => {
         productId: new mongoose.Types.ObjectId(productId),
         owner: new mongoose.Types.ObjectId(userId),
         isActive: true,
-        remainingQuantity: { $gt: 0 }
+        $or: [
+          { remainingQuantity: { $gt: 0 } },
+          { remainingLoose: { $gt: 0 } }
+        ]
       }
     },
     {
       $group: {
         _id: null,
-        total: { $sum: '$remainingInBase' }
+        total: { $sum: { $add: ['$remainingInBase', '$remainingLooseInBase'] } }
       }
     }
   ]);
@@ -695,10 +774,9 @@ const getTotalStockForProduct = async (productId, userId) => {
 };
 
 // ============================================================
-// Helper: Restore stock fallback (if no deduction records)
+// HELPER: Restore stock fallback
 // ============================================================
 const restoreStockFallback = async (item, userId) => {
-  // Find any stock batch for this product
   const batch = await StockBatch.findOne({
     productId: item.productId,
     owner: userId,
@@ -710,7 +788,6 @@ const restoreStockFallback = async (item, userId) => {
     batch.remainingInBase += item.quantityInBase;
     await batch.save();
   } else {
-    // Create a new batch if none exists
     const product = await Product.findById(item.productId);
     if (product) {
       const baseUnit = product.baseUnit;
@@ -728,6 +805,8 @@ const restoreStockFallback = async (item, userId) => {
         batchNumber: `RESTORE-${Date.now()}`,
         remainingQuantity: item.quantity,
         remainingInBase: item.quantityInBase,
+        remainingLoose: 0,
+        remainingLooseInBase: 0,
         owner: userId
       });
     }
