@@ -1,4 +1,4 @@
-// services/productService.js - UPDATED with UOM + StockBatch + Loose Quantity
+// services/productService.js - COMPLETE with UOM + StockBatch + Loose Quantity
 import Product from '../models/Product.js';
 import StockBatch from '../models/StockBatch.js';
 import mongoose from 'mongoose';
@@ -256,7 +256,7 @@ export const deleteProduct = async (productId, userId) => {
 };
 
 // ============================================================
-// Get low stock products (using StockBatch)
+// Get low stock products (using StockBatch) - INCLUDES LOOSE
 // ============================================================
 export const getLowStockProducts = async (userId) => {
   const products = await Product.aggregate([
@@ -269,13 +269,24 @@ export const getLowStockProducts = async (userId) => {
         as: 'stock'
       }
     },
+    { $unwind: { path: '$stock', preserveNullAndEmptyArrays: true } },
     {
-      $addFields: {
+      $group: {
+        _id: '$_id',
+        name: { $first: '$name' },
+        description: { $first: '$description' },
+        category: { $first: '$category' },
+        baseUnit: { $first: '$baseUnit' },
+        minStockAlert: { $first: '$minStockAlert' },
         totalStock: {
           $sum: {
-            $add: ['$stock.remainingInBase', '$stock.remainingLooseInBase']
+            $add: [
+              { $ifNull: ['$stock.remainingInBase', 0] },
+              { $ifNull: ['$stock.remainingLooseInBase', 0] }
+            ]
           }
-        }
+        },
+        stockBatches: { $push: '$stock' }
       }
     },
     {
@@ -294,7 +305,7 @@ export const getLowStockProducts = async (userId) => {
         baseUnit: 1,
         totalStock: 1,
         minStockAlert: 1,
-        stockBatches: '$stock'
+        stockBatches: 1
       }
     }
   ]);
@@ -303,7 +314,7 @@ export const getLowStockProducts = async (userId) => {
 };
 
 // ============================================================
-// Get out of stock products (using StockBatch)
+// Get out of stock products (using StockBatch) - INCLUDES LOOSE
 // ============================================================
 export const getOutOfStockProducts = async (userId) => {
   const products = await Product.aggregate([
@@ -316,11 +327,21 @@ export const getOutOfStockProducts = async (userId) => {
         as: 'stock'
       }
     },
+    { $unwind: { path: '$stock', preserveNullAndEmptyArrays: true } },
     {
-      $addFields: {
+      $group: {
+        _id: '$_id',
+        name: { $first: '$name' },
+        description: { $first: '$description' },
+        category: { $first: '$category' },
+        baseUnit: { $first: '$baseUnit' },
+        minStockAlert: { $first: '$minStockAlert' },
         totalStock: {
           $sum: {
-            $add: ['$stock.remainingInBase', '$stock.remainingLooseInBase']
+            $add: [
+              { $ifNull: ['$stock.remainingInBase', 0] },
+              { $ifNull: ['$stock.remainingLooseInBase', 0] }
+            ]
           }
         }
       }
@@ -378,24 +399,26 @@ export const addStock = async (data) => {
     throw new Error(`Unit "${unitName}" not found in product's stock units`);
   }
 
-  // Calculate quantities
-  const quantityInBase = quantity * stockUnit.conversion;
-  let totalCost = quantity * buyPrice;
-  let looseInBase = 0;
-  let finalLooseQuantity = 0;
-  let finalBundleSize = 0;
+  // Parse values
+  const bundles = parseFloat(quantity) || 0;
+  const loose = parseFloat(looseQuantity) || 0;
+  const size = parseInt(bundleSize) || 0;
 
-  // Handle loose quantity
-  if (useLoose && bundleSize > 0) {
-    finalBundleSize = bundleSize;
-    if (looseQuantity > 0) {
-      finalLooseQuantity = looseQuantity;
-      looseInBase = looseQuantity * stockUnit.conversion;
-      totalCost += looseQuantity * buyPrice;
-    }
+  // Calculate total units
+  let totalUnits;
+  let bundleUnits;
+  
+  if (size > 0) {
+    bundleUnits = bundles * size;
+    totalUnits = bundleUnits + loose;
+  } else {
+    bundleUnits = bundles;
+    totalUnits = bundles + loose;
   }
 
-  // Create stock batch with loose tracking
+  const quantityInBase = totalUnits * stockUnit.conversion;
+  const totalCost = totalUnits * parseFloat(buyPrice);
+
   const stockBatch = await StockBatch.create({
     productId: product._id,
     unit: {
@@ -403,29 +426,23 @@ export const addStock = async (data) => {
       label: stockUnit.label,
       conversion: stockUnit.conversion
     },
-    // Main bundles
-    quantity: quantity,
-    quantityInBase: quantityInBase,
-    // Loose
-    looseQuantity: finalLooseQuantity,
-    looseInBase: looseInBase,
-    bundleSize: finalBundleSize,
-    // Cost
-    buyPrice: buyPrice,
+    quantity: bundles,
+    quantityInBase: bundleUnits * stockUnit.conversion,
+    looseQuantity: loose,
+    looseInBase: loose * stockUnit.conversion,
+    bundleSize: size,
+    buyPrice: parseFloat(buyPrice),
     totalCost: totalCost,
-    // Tracking
-    batchNumber: batchNumber,
-    supplierName: supplier,
-    expiryDate: expiryDate,
-    // Remaining
-    remainingQuantity: quantity,
-    remainingInBase: quantityInBase,
-    remainingLoose: finalLooseQuantity,
-    remainingLooseInBase: looseInBase,
+    batchNumber: batchNumber || `INITIAL-${Date.now()}`,
+    supplierName: supplier || 'Initial Stock',
+    expiryDate: expiryDate || null,
+    remainingQuantity: bundles,
+    remainingInBase: bundleUnits * stockUnit.conversion,
+    remainingLoose: loose,
+    remainingLooseInBase: loose * stockUnit.conversion,
     owner: ownerId
   });
 
-  // Update product quantity
   const totalStock = await getTotalStockForProduct(productId, ownerId);
   product.quantity = totalStock;
   product.lastRestockDate = new Date();
@@ -512,7 +529,6 @@ export const convertStock = async (data) => {
   const fromQuantityInBase = quantity * fromStockUnit.conversion;
   const toQuantity = fromQuantityInBase / toStockUnit.conversion;
 
-  // Check both bundles and loose
   const sourceBatches = await StockBatch.find({
     productId: product._id,
     owner: ownerId,
@@ -534,14 +550,12 @@ export const convertStock = async (data) => {
     throw new Error(`Insufficient stock in ${fromUnit}. Available: ${totalAvailable}, Required: ${quantity}`);
   }
 
-  // Deduct from bundles first, then loose
   let remainingToDeduct = quantity;
   const deductions = [];
 
   for (const batch of sourceBatches) {
     if (remainingToDeduct <= 0) break;
 
-    // Try bundles first
     if (batch.remainingQuantity > 0) {
       const deductQuantity = Math.min(batch.remainingQuantity, remainingToDeduct);
       const deductInBase = deductQuantity * fromStockUnit.conversion;
@@ -560,7 +574,6 @@ export const convertStock = async (data) => {
       remainingToDeduct -= deductQuantity;
     }
 
-    // Then loose
     if (remainingToDeduct > 0 && batch.remainingLoose > 0) {
       const looseInUnits = batch.remainingLoose / fromStockUnit.conversion;
       const deductLoose = Math.min(looseInUnits, remainingToDeduct);
@@ -581,7 +594,6 @@ export const convertStock = async (data) => {
     }
   }
 
-  // Calculate average cost
   let totalCost = 0;
   for (const deduction of deductions) {
     const batch = sourceBatches.find(b => b._id.toString() === deduction.batchId.toString());
@@ -761,50 +773,8 @@ export const deleteStockBatch = async (data) => {
 };
 
 // ============================================================
-// Helpers
+// HELPERS
 // ============================================================
-
-const getStockForProduct = async (productId, userId) => {
-  const result = await StockBatch.aggregate([
-    {
-      $match: {
-        productId: new mongoose.Types.ObjectId(productId),
-        owner: new mongoose.Types.ObjectId(userId),
-        isActive: true,
-        $or: [
-          { remainingQuantity: { $gt: 0 } },
-          { remainingLoose: { $gt: 0 } }
-        ]
-      }
-    },
-    {
-      $group: {
-        _id: null,
-        totalInBase: { $sum: { $add: ['$remainingInBase', '$remainingLooseInBase'] } },
-        totalLooseInBase: { $sum: '$remainingLooseInBase' },
-        batches: {
-          $push: {
-            _id: '$_id',
-            unit: '$unit',
-            remainingQuantity: '$remainingQuantity',
-            remainingInBase: '$remainingInBase',
-            remainingLoose: '$remainingLoose',
-            remainingLooseInBase: '$remainingLooseInBase',
-            bundleSize: '$bundleSize',
-            buyPrice: '$buyPrice',
-            totalCost: '$totalCost',
-            batchNumber: '$batchNumber',
-            supplierName: '$supplierName',
-            expiryDate: '$expiryDate',
-            receivedAt: '$receivedAt'
-          }
-        }
-      }
-    }
-  ]);
-
-  return result.length > 0 ? result[0] : { totalInBase: 0, totalLooseInBase: 0, batches: [] };
-};
 
 const getStockForProducts = async (productIds, userId) => {
   if (!productIds || productIds.length === 0) return {};
@@ -814,26 +784,22 @@ const getStockForProducts = async (productIds, userId) => {
       $match: {
         productId: { $in: productIds.map(id => new mongoose.Types.ObjectId(id)) },
         owner: new mongoose.Types.ObjectId(userId),
-        isActive: true,
-        $or: [
-          { remainingQuantity: { $gt: 0 } },
-          { remainingLoose: { $gt: 0 } }
-        ]
+        isActive: true
       }
     },
     {
       $group: {
         _id: '$productId',
-        totalInBase: { $sum: { $add: ['$remainingInBase', '$remainingLooseInBase'] } },
+        totalInBase: { $sum: { $add: [{ $ifNull: ['$remainingInBase', 0] }, { $ifNull: ['$remainingLooseInBase', 0] }] } },
         batches: {
           $push: {
             _id: '$_id',
             unit: '$unit',
             remainingQuantity: '$remainingQuantity',
             remainingInBase: '$remainingInBase',
-            remainingLoose: '$remainingLoose',
-            remainingLooseInBase: '$remainingLooseInBase',
-            bundleSize: '$bundleSize',
+            remainingLoose: { $ifNull: ['$remainingLoose', 0] },
+            remainingLooseInBase: { $ifNull: ['$remainingLooseInBase', 0] },
+            bundleSize: { $ifNull: ['$bundleSize', 0] },
             buyPrice: '$buyPrice',
             expiryDate: '$expiryDate'
           }
@@ -853,23 +819,70 @@ const getStockForProducts = async (productIds, userId) => {
   return stockMap;
 };
 
+const getStockForProduct = async (productId, userId) => {
+  const result = await StockBatch.aggregate([
+    {
+      $match: {
+        productId: new mongoose.Types.ObjectId(productId),
+        owner: new mongoose.Types.ObjectId(userId),
+        isActive: true
+      }
+    },
+    {
+      $group: {
+        _id: null,
+        totalInBase: { 
+          $sum: { 
+            $add: [
+              { $ifNull: ['$remainingInBase', 0] }, 
+              { $ifNull: ['$remainingLooseInBase', 0] }
+            ] 
+          } 
+        },
+        totalLooseInBase: { 
+          $sum: { $ifNull: ['$remainingLooseInBase', 0] } 
+        },
+        batches: {
+          $push: {
+            _id: '$_id',
+            unit: '$unit',
+            remainingQuantity: '$remainingQuantity',
+            remainingInBase: '$remainingInBase',
+            remainingLoose: { $ifNull: ['$remainingLoose', 0] },
+            remainingLooseInBase: { $ifNull: ['$remainingLooseInBase', 0] },
+            bundleSize: { $ifNull: ['$bundleSize', 0] },
+            buyPrice: '$buyPrice',
+            totalCost: '$totalCost',
+            batchNumber: '$batchNumber',
+            supplierName: '$supplierName',
+            expiryDate: '$expiryDate',
+            receivedAt: '$receivedAt'
+          }
+        }
+      }
+    }
+  ]);
+
+  return result.length > 0 ? result[0] : { 
+    totalInBase: 0, 
+    totalLooseInBase: 0, 
+    batches: [] 
+  };
+};
+
 const getTotalStockForProduct = async (productId, userId) => {
   const result = await StockBatch.aggregate([
     {
       $match: {
         productId: new mongoose.Types.ObjectId(productId),
         owner: new mongoose.Types.ObjectId(userId),
-        isActive: true,
-        $or: [
-          { remainingQuantity: { $gt: 0 } },
-          { remainingLoose: { $gt: 0 } }
-        ]
+        isActive: true
       }
     },
     {
       $group: {
         _id: null,
-        total: { $sum: { $add: ['$remainingInBase', '$remainingLooseInBase'] } }
+        total: { $sum: { $add: [{ $ifNull: ['$remainingInBase', 0] }, { $ifNull: ['$remainingLooseInBase', 0] }] } }
       }
     }
   ]);

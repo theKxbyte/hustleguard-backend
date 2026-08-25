@@ -52,15 +52,12 @@ export const searchPosProducts = async (filters) => {
 
   const total = await Product.countDocuments(queryObj);
 
-  // ✅ FIXED: Get stock including loose
   const productIds = products.map(p => p._id);
   const stockData = await getStockForProducts(productIds, ownerId);
 
   const enrichedProducts = [];
   for (const product of products) {
     const stock = stockData[product._id.toString()] || { totalInBase: 0, batches: [], totalLooseInBase: 0 };
-    
-    // Total stock = bundles + loose
     const totalStock = (stock.totalInBase || 0) + (stock.totalLooseInBase || 0);
     
     if (!includeOutOfStock && totalStock <= 0) {
@@ -568,10 +565,17 @@ const getStockForProducts = async (productIds, ownerId) => {
     {
       $group: {
         _id: '$productId',
-        totalInBase: { $sum: '$remainingInBase' },
-        totalLooseInBase: { $sum: '$remainingLooseInBase' },
+        totalInBase: { 
+          $sum: { 
+            $add: [
+              { $ifNull: ['$remainingInBase', 0] },
+              { $ifNull: ['$remainingLooseInBase', 0] }
+            ] 
+          } 
+        },
         batches: {
           $push: {
+            _id: '$_id',
             unit: '$unit',
             remainingQuantity: '$remainingQuantity',
             remainingInBase: '$remainingInBase',
@@ -590,7 +594,6 @@ const getStockForProducts = async (productIds, ownerId) => {
   result.forEach(item => {
     stockMap[item._id.toString()] = {
       totalInBase: item.totalInBase,
-      totalLooseInBase: item.totalLooseInBase || 0,
       batches: item.batches
     };
   });

@@ -1,4 +1,4 @@
-// services/saleService.js - UPDATED with UOM + Multi-item Support + Loose Quantity
+// services/saleService.js - COMPLETE with UOM + Multi-item Support + Loose Quantity
 import Sale from '../models/Sale.js';
 import Product from '../models/Product.js';
 import StockBatch from '../models/StockBatch.js';
@@ -77,7 +77,6 @@ export const recordSale = async (saleData, userId) => {
       sellUnit
     );
 
-    // Auto-convert loose to bundles after deduction
     await autoConvertLooseToBundles(productId, userId);
 
     const saleItem = {
@@ -364,7 +363,6 @@ export const deleteSale = async (saleId, userId) => {
       for (const deduction of item.stockDeductions) {
         const batch = await StockBatch.findById(deduction.batchId);
         if (batch) {
-          // Restore to the correct field based on source
           if (deduction.source === 'loose') {
             batch.remainingLoose += deduction.quantityDeducted;
             batch.remainingLooseInBase += deduction.quantityInBaseDeducted;
@@ -534,26 +532,29 @@ const getStockForProduct = async (productId, userId) => {
       $match: {
         productId: new mongoose.Types.ObjectId(productId),
         owner: new mongoose.Types.ObjectId(userId),
-        isActive: true,
-        $or: [
-          { remainingQuantity: { $gt: 0 } },
-          { remainingLoose: { $gt: 0 } }
-        ]
+        isActive: true
       }
     },
     {
       $group: {
         _id: null,
-        totalInBase: { $sum: { $add: ['$remainingInBase', '$remainingLooseInBase'] } },
+        totalInBase: { 
+          $sum: { 
+            $add: [
+              { $ifNull: ['$remainingInBase', 0] }, 
+              { $ifNull: ['$remainingLooseInBase', 0] }
+            ] 
+          } 
+        },
         batches: {
           $push: {
             _id: '$_id',
             unit: '$unit',
             remainingQuantity: '$remainingQuantity',
             remainingInBase: '$remainingInBase',
-            remainingLoose: '$remainingLoose',
-            remainingLooseInBase: '$remainingLooseInBase',
-            bundleSize: '$bundleSize',
+            remainingLoose: { $ifNull: ['$remainingLoose', 0] },
+            remainingLooseInBase: { $ifNull: ['$remainingLooseInBase', 0] },
+            bundleSize: { $ifNull: ['$bundleSize', 0] },
             buyPrice: '$buyPrice'
           }
         }
@@ -585,7 +586,6 @@ const calculateCost = async (productId, userId, quantityInBase) => {
   for (const batch of batches) {
     if (remaining <= 0) break;
 
-    // Check loose first
     let availableInBase = batch.remainingLooseInBase || 0;
     if (availableInBase > 0) {
       const usedInBase = Math.min(remaining, availableInBase);
@@ -603,7 +603,6 @@ const calculateCost = async (productId, userId, quantityInBase) => {
       });
     }
 
-    // Then bundles
     if (remaining > 0) {
       availableInBase = batch.remainingInBase || 0;
       if (availableInBase > 0) {
@@ -655,13 +654,11 @@ const deductStockFIFO = async (productId, userId, quantityInBase, sellUnit) => {
   for (const batch of batches) {
     if (remaining <= 0) break;
 
-    // STEP 1: Deduct from loose first
     if (batch.remainingLoose > 0) {
       const availableInBase = batch.remainingLooseInBase || 0;
       const usedInBase = Math.min(remaining, availableInBase);
       const usedInUnit = usedInBase / sellUnit.conversion;
 
-      // Deduct loose
       batch.remainingLoose -= usedInUnit;
       batch.remainingLooseInBase -= usedInBase;
       await batch.save();
@@ -677,13 +674,11 @@ const deductStockFIFO = async (productId, userId, quantityInBase, sellUnit) => {
       remaining -= usedInBase;
     }
 
-    // STEP 2: Deduct from bundles if still needed
     if (remaining > 0 && batch.remainingQuantity > 0) {
       const availableInBase = batch.remainingInBase || 0;
       const usedInBase = Math.min(remaining, availableInBase);
       const usedInUnit = usedInBase / sellUnit.conversion;
 
-      // Deduct bundles
       batch.remainingQuantity -= usedInUnit;
       batch.remainingInBase -= usedInBase;
       await batch.save();
@@ -726,11 +721,9 @@ const autoConvertLooseToBundles = async (productId, userId) => {
       const bundlesToAdd = Math.floor(batch.remainingLoose / batch.bundleSize);
       const looseRemaining = batch.remainingLoose % batch.bundleSize;
 
-      // Add to bundles
       batch.remainingQuantity += bundlesToAdd;
       batch.remainingInBase += bundlesToAdd * batch.bundleSize * batch.unit.conversion;
 
-      // Remove from loose
       batch.remainingLoose = looseRemaining;
       batch.remainingLooseInBase = looseRemaining * batch.unit.conversion;
 
@@ -755,17 +748,20 @@ const getTotalStockForProduct = async (productId, userId) => {
       $match: {
         productId: new mongoose.Types.ObjectId(productId),
         owner: new mongoose.Types.ObjectId(userId),
-        isActive: true,
-        $or: [
-          { remainingQuantity: { $gt: 0 } },
-          { remainingLoose: { $gt: 0 } }
-        ]
+        isActive: true
       }
     },
     {
       $group: {
         _id: null,
-        total: { $sum: { $add: ['$remainingInBase', '$remainingLooseInBase'] } }
+        total: { 
+          $sum: { 
+            $add: [
+              { $ifNull: ['$remainingInBase', 0] }, 
+              { $ifNull: ['$remainingLooseInBase', 0] }
+            ] 
+          } 
+        }
       }
     }
   ]);
