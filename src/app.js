@@ -11,6 +11,8 @@ import alertRoutes from './routes/alertRoutes.js';
 import posRoutes from './routes/posRoutes.js';
 import dashboardRoutes from './routes/dashboardRoutes.js';
 import categoryRoutes from './routes/categoryRoutes.js';
+import reportRoutes from './routes/reportRoutes.js';
+
 
 
 dotenv.config();
@@ -27,11 +29,13 @@ const corsOptions = {
     const allowedOrigins = [
       'https://hustleguard-web.vercel.app',
       'http://localhost:3000',
+      'http://localhost:3002',
       'https://hustleguard.jreedtechgroup.co.ke',
       'http://localhost:5173',
     ];
     
-    if (allowedOrigins.indexOf(origin) !== -1 || origin.includes('vercel.app')) {
+    // Check if origin is in allowed list OR is a vercel domain
+    if (allowedOrigins.indexOf(origin) !== -1 || (typeof origin === 'string' && origin.includes('vercel.app'))) {
       callback(null, true);
     } else {
       callback(new Error('Not allowed by CORS'));
@@ -61,6 +65,7 @@ app.use('/api/alerts', alertRoutes);
 app.use('/api/pos', posRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/categories', categoryRoutes); 
+app.use('/api/reports', reportRoutes);
 
 
 app.get('/health', (req, res) => {
