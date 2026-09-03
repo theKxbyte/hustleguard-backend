@@ -1,11 +1,10 @@
 // services/posProductService.js
 import Product from '../models/Product.js';
-import StockBatch from '../models/StockBatch.js';
 import Sale from '../models/Sale.js';
 import mongoose from 'mongoose';
 
 // ============================================================
-// Search products for POS with UOM and stock info
+// Search products for POS
 // ============================================================
 export const searchPosProducts = async (filters) => {
   const { 
@@ -14,7 +13,6 @@ export const searchPosProducts = async (filters) => {
     limit = 20, 
     offset = 0, 
     includeOutOfStock = false,
-    includeUnits = false,
     ownerId 
   } = filters;
 
@@ -31,8 +29,7 @@ export const searchPosProducts = async (filters) => {
     const searchTerm = query.trim();
     if (/^[0-9]+$/.test(searchTerm)) {
       queryObj.$or = [
-        { 'sellUnits.barcode': searchTerm },
-        { 'stockUnits.barcode': searchTerm },
+        { 'units.barcode': searchTerm },
         { name: { $regex: searchTerm, $options: 'i' } }
       ];
     } else {
@@ -44,7 +41,7 @@ export const searchPosProducts = async (filters) => {
   }
 
   let products = await Product.find(queryObj)
-    .select('name description category baseUnit sellUnits stockUnits minStockAlert isActive')
+    .select('name description category units minStockAlert stock isActive')
     .lean()
     .limit(limit)
     .skip(offset)
@@ -52,52 +49,34 @@ export const searchPosProducts = async (filters) => {
 
   const total = await Product.countDocuments(queryObj);
 
-  const productIds = products.map(p => p._id);
-  const stockData = await getStockForProducts(productIds, ownerId);
-
   const enrichedProducts = [];
   for (const product of products) {
-    const stock = stockData[product._id.toString()] || { totalInBase: 0, batches: [], totalLooseInBase: 0 };
-    const totalStock = (stock.totalInBase || 0) + (stock.totalLooseInBase || 0);
+    const totalStock = product.stock || 0;
     
     if (!includeOutOfStock && totalStock <= 0) {
       continue;
     }
 
-    const sellUnitsWithStock = product.sellUnits?.map(unit => {
+    const sellUnits = product.units?.filter(u => u.isActive !== false) || [];
+    const sellUnitsWithStock = sellUnits.map(unit => {
       const availableInUnit = totalStock / unit.conversion;
       return {
         ...unit,
         availableStock: totalStock,
         availableUnits: availableInUnit,
         inStock: totalStock > 0 && availableInUnit >= 0.001,
-        canSell: totalStock > 0
+        canSell: totalStock > 0,
+        maxQuantity: Math.floor(availableInUnit)
       };
-    }) || [];
-
-    const stockBreakdown = {
-      totalInBase: totalStock,
-      batches: stock.batches.map(b => ({
-        unit: b.unit,
-        quantity: b.remainingQuantity,
-        quantityInBase: b.remainingInBase,
-        looseQuantity: b.remainingLoose || 0,
-        looseInBase: b.remainingLooseInBase || 0,
-        bundleSize: b.bundleSize || 0,
-        buyPrice: b.buyPrice,
-        expiryDate: b.expiryDate
-      }))
-    };
+    });
 
     enrichedProducts.push({
       _id: product._id,
       name: product.name,
       description: product.description,
       category: product.category,
-      baseUnit: product.baseUnit,
-      sellUnits: includeUnits ? sellUnitsWithStock : undefined,
-      stockUnits: product.stockUnits,
-      stockBreakdown: includeUnits ? stockBreakdown : undefined,
+      units: product.units,
+      sellUnits: sellUnitsWithStock,
       totalStock: totalStock,
       minStockAlert: product.minStockAlert,
       isLowStock: totalStock <= product.minStockAlert && totalStock > 0,
@@ -116,7 +95,7 @@ export const searchPosProducts = async (filters) => {
 };
 
 // ============================================================
-// Get product by barcode (search across all units)
+// Get product by barcode
 // ============================================================
 export const getProductByBarcode = async (barcode, ownerId) => {
   if (!barcode) return null;
@@ -124,33 +103,18 @@ export const getProductByBarcode = async (barcode, ownerId) => {
   const product = await Product.findOne({
     owner: ownerId,
     isActive: true,
-    $or: [
-      { 'sellUnits.barcode': barcode },
-      { 'stockUnits.barcode': barcode }
-    ]
+    'units.barcode': barcode
   })
-  .select('name description category baseUnit sellUnits stockUnits minStockAlert')
+  .select('name description category units minStockAlert stock')
   .lean();
 
   if (!product) return null;
 
-  let matchedUnit = null;
-  let unitType = null;
-
-  if (product.sellUnits) {
-    matchedUnit = product.sellUnits.find(u => u.barcode === barcode);
-    if (matchedUnit) unitType = 'sell';
-  }
-
-  if (!matchedUnit && product.stockUnits) {
-    matchedUnit = product.stockUnits.find(u => u.barcode === barcode);
-    if (matchedUnit) unitType = 'stock';
-  }
+  const matchedUnit = product.units?.find(u => u.barcode === barcode);
 
   return {
     ...product,
-    matchedUnit,
-    unitType
+    matchedUnit
   };
 };
 
@@ -158,10 +122,10 @@ export const getProductByBarcode = async (barcode, ownerId) => {
 // Get product with sell units and stock info
 // ============================================================
 export const getProductWithSellUnits = async (product, ownerId) => {
-  const stock = await getStockForProduct(product._id, ownerId);
-  const totalStock = (stock.totalInBase || 0) + (stock.totalLooseInBase || 0);
+  const totalStock = product.stock || 0;
   
-  const sellUnitsWithStock = product.sellUnits?.map(unit => {
+  const sellUnits = product.units?.filter(u => u.isActive !== false) || [];
+  const sellUnitsWithStock = sellUnits.map(unit => {
     const availableInUnit = totalStock / unit.conversion;
     return {
       ...unit,
@@ -171,13 +135,12 @@ export const getProductWithSellUnits = async (product, ownerId) => {
       canSell: totalStock > 0,
       maxQuantity: Math.floor(availableInUnit)
     };
-  }) || [];
+  });
 
   return {
     ...product,
     sellUnits: sellUnitsWithStock,
     totalStock: totalStock,
-    stockBatches: stock.batches,
     isLowStock: totalStock <= product.minStockAlert && totalStock > 0,
     isOutOfStock: totalStock <= 0
   };
@@ -186,28 +149,27 @@ export const getProductWithSellUnits = async (product, ownerId) => {
 // ============================================================
 // Get multiple products by IDs
 // ============================================================
-export const getProductsBatch = async (productIds, ownerId, includeUnits = false) => {
+export const getProductsBatch = async (productIds, ownerId) => {
   const products = await Product.find({
     _id: { $in: productIds },
     owner: ownerId,
     isActive: true
   })
-  .select('name description category baseUnit sellUnits stockUnits minStockAlert')
+  .select('name description category units minStockAlert stock')
   .lean();
 
   const productMap = {};
-  const stockData = await getStockForProducts(productIds, ownerId);
 
   for (const product of products) {
-    const stock = stockData[product._id.toString()] || { totalInBase: 0, batches: [], totalLooseInBase: 0 };
-    const totalStock = (stock.totalInBase || 0) + (stock.totalLooseInBase || 0);
+    const totalStock = product.stock || 0;
     
-    const sellUnitsWithStock = includeUnits ? product.sellUnits?.map(unit => ({
+    const sellUnits = product.units?.filter(u => u.isActive !== false) || [];
+    const sellUnitsWithStock = sellUnits.map(unit => ({
       ...unit,
       availableStock: totalStock,
       availableUnits: totalStock / unit.conversion,
       inStock: totalStock > 0
-    })) : undefined;
+    }));
 
     productMap[product._id.toString()] = {
       ...product,
@@ -236,32 +198,26 @@ export const getProductSuggestions = async (query, ownerId, limit = 10) => {
     isActive: true,
     $or: [
       { name: { $regex: searchTerm, $options: 'i' } },
-      { 'sellUnits.barcode': searchTerm },
-      { 'stockUnits.barcode': searchTerm }
+      { 'units.barcode': searchTerm }
     ]
   })
-  .select('name baseUnit sellUnits stockUnits')
+  .select('name units stock')
   .lean()
   .limit(limit);
 
-  const productIds = products.map(p => p._id);
-  const stockData = await getStockForProducts(productIds, ownerId);
-
   return products.map(product => {
-    const stock = stockData[product._id.toString()] || { totalInBase: 0, totalLooseInBase: 0 };
-    const totalStock = (stock.totalInBase || 0) + (stock.totalLooseInBase || 0);
-    const sellUnits = product.sellUnits?.filter(u => u.isActive) || [];
-    const primaryUnit = sellUnits[0] || product.stockUnits?.[0] || { name: 'unit', label: 'Unit' };
+    const totalStock = product.stock || 0;
+    const sellUnits = product.units?.filter(u => u.isActive !== false) || [];
+    const primaryUnit = sellUnits[0] || { name: 'unit', label: 'Unit' };
 
     return {
       id: product._id,
       name: product.name,
-      baseUnit: product.baseUnit,
       primaryUnit: primaryUnit,
       sellingPrice: primaryUnit.sellPrice || 0,
       availableStock: totalStock,
       inStock: totalStock > 0,
-      display: `${product.name} (${totalStock} ${product.baseUnit?.label || 'units'} available)`,
+      display: `${product.name} (${totalStock} ${primaryUnit.label || 'units'} available)`,
       quickAdd: {
         unit: primaryUnit.name,
         price: primaryUnit.sellPrice || 0,
@@ -280,17 +236,17 @@ export const getPosProductStock = async (productId, ownerId) => {
     owner: ownerId,
     isActive: true
   })
-  .select('name baseUnit sellUnits stockUnits minStockAlert')
+  .select('name units minStockAlert stock')
   .lean();
 
   if (!product) {
     throw new Error('Product not found');
   }
 
-  const stock = await getStockForProduct(productId, ownerId);
-  const totalStock = (stock.totalInBase || 0) + (stock.totalLooseInBase || 0);
+  const totalStock = product.stock || 0;
 
-  const sellUnitsWithStock = product.sellUnits?.map(unit => {
+  const sellUnits = product.units?.filter(u => u.isActive !== false) || [];
+  const sellUnitsWithStock = sellUnits.map(unit => {
     const availableInUnit = totalStock / unit.conversion;
     return {
       ...unit,
@@ -299,24 +255,13 @@ export const getPosProductStock = async (productId, ownerId) => {
       inStock: totalStock > 0 && availableInUnit >= 0.001,
       maxQuantity: Math.floor(availableInUnit)
     };
-  }) || [];
+  });
 
   return {
     productId: product._id,
     productName: product.name,
-    baseUnit: product.baseUnit,
     totalStock: totalStock,
-    sellUnits: sellUnitsWithStock,
-    stockBatches: stock.batches.map(b => ({
-      unit: b.unit,
-      quantity: b.remainingQuantity,
-      quantityInBase: b.remainingInBase,
-      looseQuantity: b.remainingLoose || 0,
-      looseInBase: b.remainingLooseInBase || 0,
-      bundleSize: b.bundleSize || 0,
-      buyPrice: b.buyPrice,
-      expiryDate: b.expiryDate
-    })),
+    units: sellUnitsWithStock,
     isLowStock: totalStock <= product.minStockAlert && totalStock > 0,
     isOutOfStock: totalStock <= 0
   };
@@ -331,15 +276,14 @@ export const checkUnitAvailability = async (productId, ownerId, unitName, quanti
     owner: ownerId,
     isActive: true
   })
-  .select('name baseUnit sellUnits stockUnits')
+  .select('name units stock')
   .lean();
 
   if (!product) {
     throw new Error('Product not found');
   }
 
-  const allUnits = [...(product.sellUnits || []), ...(product.stockUnits || [])];
-  const unit = allUnits.find(u => u.name === unitName && u.isActive !== false);
+  const unit = product.units?.find(u => u.name === unitName && u.isActive !== false);
 
   if (!unit) {
     return {
@@ -351,8 +295,7 @@ export const checkUnitAvailability = async (productId, ownerId, unitName, quanti
     };
   }
 
-  const stock = await getStockForProduct(productId, ownerId);
-  const totalStock = (stock.totalInBase || 0) + (stock.totalLooseInBase || 0);
+  const totalStock = product.stock || 0;
   const requestedInBase = quantity * unit.conversion;
 
   return {
@@ -369,8 +312,7 @@ export const checkUnitAvailability = async (productId, ownerId, unitName, quanti
     canFulfill: totalStock >= requestedInBase,
     maxQuantity: Math.floor(totalStock / unit.conversion),
     pricePerUnit: unit.sellPrice || 0,
-    totalPrice: (unit.sellPrice || 0) * quantity,
-    unitType: product.sellUnits?.some(u => u.name === unitName) ? 'sell' : 'stock'
+    totalPrice: (unit.sellPrice || 0) * quantity
   };
 };
 
@@ -388,11 +330,10 @@ export const quickScanProduct = async (input, ownerId) => {
     $or: [
       { name: { $regex: `^${searchTerm}$`, $options: 'i' } },
       { name: { $regex: searchTerm, $options: 'i' } },
-      { 'sellUnits.barcode': searchTerm },
-      { 'stockUnits.barcode': searchTerm }
+      { 'units.barcode': searchTerm }
     ]
   })
-  .select('name description category baseUnit sellUnits stockUnits minStockAlert')
+  .select('name description category units minStockAlert stock')
   .lean();
 
   if (!product) return null;
@@ -417,17 +358,11 @@ export const getRecentProducts = async (ownerId, limit = 10) => {
       owner: ownerId,
       isActive: true
     })
-    .select('name baseUnit sellUnits')
+    .select('name units stock')
     .limit(limit)
     .lean();
 
-    const productIds = products.map(p => p._id);
-    const stockData = await getStockForProducts(productIds, ownerId);
-
-    return products.map(p => ({
-      ...p,
-      totalStock: (stockData[p._id.toString()]?.totalInBase || 0) + (stockData[p._id.toString()]?.totalLooseInBase || 0)
-    }));
+    return products;
   }
 
   const productIds = recentSales.map(item => item._id);
@@ -436,7 +371,7 @@ export const getRecentProducts = async (ownerId, limit = 10) => {
     owner: ownerId,
     isActive: true
   })
-  .select('name baseUnit sellUnits stockUnits')
+  .select('name units stock')
   .lean();
 
   const productMap = {};
@@ -444,15 +379,11 @@ export const getRecentProducts = async (ownerId, limit = 10) => {
     productMap[p._id.toString()] = p;
   });
 
-  const stockData = await getStockForProducts(productIds, ownerId);
-
   return recentSales.map(item => {
     const product = productMap[item._id.toString()];
     if (!product) return null;
-    const stock = stockData[item._id.toString()] || { totalInBase: 0, totalLooseInBase: 0 };
     return {
       ...product,
-      totalStock: (stock.totalInBase || 0) + (stock.totalLooseInBase || 0),
       lastSold: item.lastSold
     };
   }).filter(Boolean);
@@ -467,27 +398,20 @@ export const getProductUnitPrice = async (productId, ownerId, unitName) => {
     owner: ownerId,
     isActive: true
   })
-  .select('name baseUnit sellUnits stockUnits')
+  .select('name units stock')
   .lean();
 
   if (!product) {
     return null;
   }
 
-  let unit = product.sellUnits?.find(u => u.name === unitName && u.isActive !== false);
-  let unitType = 'sell';
-
-  if (!unit) {
-    unit = product.stockUnits?.find(u => u.name === unitName && u.isActive !== false);
-    unitType = 'stock';
-  }
+  const unit = product.units?.find(u => u.name === unitName && u.isActive !== false);
 
   if (!unit) {
     return null;
   }
 
-  const stock = await getStockForProduct(productId, ownerId);
-  const totalStock = (stock.totalInBase || 0) + (stock.totalLooseInBase || 0);
+  const totalStock = product.stock || 0;
 
   return {
     productId: product._id,
@@ -497,106 +421,8 @@ export const getProductUnitPrice = async (productId, ownerId, unitName) => {
     conversion: unit.conversion,
     sellPrice: unit.sellPrice || 0,
     buyPrice: unit.buyPrice || 0,
-    unitType,
     availableStock: totalStock,
     availableUnits: totalStock / unit.conversion,
     inStock: totalStock > 0
   };
-};
-
-// ============================================================
-// HELPER: Get stock for a single product (INCLUDES LOOSE)
-// ============================================================
-const getStockForProduct = async (productId, ownerId) => {
-  const result = await StockBatch.aggregate([
-    {
-      $match: {
-        productId: new mongoose.Types.ObjectId(productId),
-        owner: new mongoose.Types.ObjectId(ownerId),
-        isActive: true,
-        $or: [
-          { remainingQuantity: { $gt: 0 } },
-          { remainingLoose: { $gt: 0 } }
-        ]
-      }
-    },
-    {
-      $group: {
-        _id: null,
-        totalInBase: { $sum: '$remainingInBase' },
-        totalLooseInBase: { $sum: '$remainingLooseInBase' },
-        batches: {
-          $push: {
-            unit: '$unit',
-            remainingQuantity: '$remainingQuantity',
-            remainingInBase: '$remainingInBase',
-            remainingLoose: '$remainingLoose',
-            remainingLooseInBase: '$remainingLooseInBase',
-            bundleSize: '$bundleSize',
-            buyPrice: '$buyPrice',
-            expiryDate: '$expiryDate'
-          }
-        }
-      }
-    }
-  ]);
-
-  return result.length > 0 ? result[0] : { totalInBase: 0, totalLooseInBase: 0, batches: [] };
-};
-
-// ============================================================
-// HELPER: Get stock for multiple products (INCLUDES LOOSE)
-// ============================================================
-const getStockForProducts = async (productIds, ownerId) => {
-  if (!productIds || productIds.length === 0) return {};
-
-  const result = await StockBatch.aggregate([
-    {
-      $match: {
-        productId: { $in: productIds.map(id => new mongoose.Types.ObjectId(id)) },
-        owner: new mongoose.Types.ObjectId(ownerId),
-        isActive: true,
-        $or: [
-          { remainingQuantity: { $gt: 0 } },
-          { remainingLoose: { $gt: 0 } }
-        ]
-      }
-    },
-    {
-      $group: {
-        _id: '$productId',
-        totalInBase: { 
-          $sum: { 
-            $add: [
-              { $ifNull: ['$remainingInBase', 0] },
-              { $ifNull: ['$remainingLooseInBase', 0] }
-            ] 
-          } 
-        },
-        batches: {
-          $push: {
-            _id: '$_id',
-            unit: '$unit',
-            remainingQuantity: '$remainingQuantity',
-            remainingInBase: '$remainingInBase',
-            remainingLoose: '$remainingLoose',
-            remainingLooseInBase: '$remainingLooseInBase',
-            bundleSize: '$bundleSize',
-            buyPrice: '$buyPrice',
-            expiryDate: '$expiryDate'
-          }
-        }
-      }
-    }
-  ]);
-
-  const stockMap = {};
-  result.forEach(item => {
-    stockMap[item._id.toString()] = {
-      totalInBase: item.totalInBase,
-      batches: item.batches
-    };
-  });
-
-  return stockMap;
 };

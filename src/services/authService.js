@@ -50,6 +50,7 @@ export const loginUser = async (email, password) => {
     throw new Error('Invalid credentials');
   }
 
+  
   // Check password
   const isPasswordMatch = await user.matchPassword(password);
   if (!isPasswordMatch) {

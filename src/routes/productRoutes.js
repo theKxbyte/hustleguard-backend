@@ -10,16 +10,10 @@ import {
   getLowStock,
   getOutOfStock,
   addProductStock,
-  getProductStock,
-  convertStock,
   getProductByBarcode,
   bulkCreateProducts,
-  getStockAlerts,
-  deleteStockBatch,
-  updateStockBatch
+  getStockAlerts
 } from '../controllers/productController.js';
-
-
 
 const router = express.Router();
 
@@ -30,51 +24,41 @@ router.use(protect);
 // Special Routes (must come before /:id routes)
 // ============================================================
 
-// GET /api/products/low-stock - Get low stock products
+// GET /api/products/low-stock
 router.get('/low-stock', getLowStock);
 
-// GET /api/products/out-of-stock - Get out of stock products
+// GET /api/products/out-of-stock
 router.get('/out-of-stock', getOutOfStock);
 
-// GET /api/products/alerts - Get stock alerts summary
+// GET /api/products/alerts
 router.get('/alerts', getStockAlerts);
 
-// GET /api/products/barcode/:barcode - Get product by barcode
+// GET /api/products/barcode/:barcode
 router.get('/barcode/:barcode', getProductByBarcode);
 
-// POST /api/products/bulk - Bulk import products
+// POST /api/products/bulk
 router.post('/bulk', bulkCreateProducts);
 
 // ============================================================
 // Product Stock Routes
 // ============================================================
 
-// GET /api/products/:id/stock - Get product stock breakdown
-// POST /api/products/:id/stock - Add stock to product
-router.put('/:productId/stock/:batchId', updateStockBatch);
-
-router.get('/:id/stock', getProductStock);
+// POST /api/products/:id/stock - Add stock
 router.post('/:id/stock', addProductStock);
-
-// DELETE /api/products/:productId/stock/:batchId - Delete stock batch
-router.delete('/:productId/stock/:batchId', deleteStockBatch);
-
-// POST /api/products/:id/convert - Convert stock between units
-router.post('/:id/convert', convertStock);
 
 // ============================================================
 // Main CRUD Routes
 // ============================================================
 
-// GET /api/products - Get all products
-// POST /api/products - Create a new product
+// GET /api/products
+// POST /api/products
 router.route('/')
   .get(getProducts)
   .post(createProduct);
 
-// GET /api/products/:id - Get single product
-// PUT /api/products/:id - Update product
-// DELETE /api/products/:id - Delete product
+// GET /api/products/:id
+// PUT /api/products/:id
+// DELETE /api/products/:id
 router.route('/:id')
   .get(getProduct)
   .put(updateProduct)

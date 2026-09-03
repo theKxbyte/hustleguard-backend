@@ -1,8 +1,8 @@
-// controllers/saleController.js - Updated with new methods
+// controllers/saleController.js
 import * as saleService from '../services/saleService.js';
 
 // ============================================================
-// @desc    Record a new sale (multi-item)
+// @desc    Record a new sale
 // @route   POST /api/sales
 // @access  Private
 // ============================================================

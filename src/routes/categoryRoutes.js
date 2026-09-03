@@ -1,6 +1,6 @@
 // routes/categoryRoutes.js
 import express from 'express';
-import { protect } from '../middlewares/auth.js';
+import { protect } from '../middlewares/auth.js'; 
 import {
   getCategories,
   getCategory,

@@ -16,8 +16,8 @@ const saleItemSchema = new mongoose.Schema({
     trim: true
   },
   
-  // Unit sold in (snapshot from Product UOM)
-  unitSold: {
+  // Unit sold in (snapshot from Product)
+  unit: {
     name: {
       type: String,
       required: true,
@@ -63,33 +63,21 @@ const saleItemSchema = new mongoose.Schema({
     min: [0, 'Total price must be positive']
   },
   
-  // Cost & Profit
-  costPerBaseUnit: {
+  // Cost & Profit (optional - for reporting)
+  costPerUnit: {
     type: Number,
-    required: true,
-    min: [0, 'Cost per base unit must be positive']
+    default: 0,
+    min: [0, 'Cost per unit must be positive']
   },
   totalCost: {
     type: Number,
-    required: true,
+    default: 0,
     min: [0, 'Total cost must be positive']
   },
   profit: {
     type: Number,
-    required: true,
     default: 0
-  },
-  
-  // Stock deductions (track which batches were used)
-  stockDeductions: [{
-    batchId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'StockBatch'
-    },
-    unitName: String,
-    quantityDeducted: Number,
-    quantityInBaseDeducted: Number
-  }]
+  }
 });
 
 // ============================================================
@@ -104,11 +92,7 @@ const saleSchema = new mongoose.Schema({
     sparse: true
   },
   
-  // ========== CUSTOMER ==========
-  customerId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Customer'
-  },
+  // Customer
   customer: {
     type: String,
     trim: true
@@ -117,16 +101,11 @@ const saleSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
-  customerEmail: {
-    type: String,
-    trim: true,
-    lowercase: true
-  },
   
-  // ========== SALE ITEMS ==========
+  // Sale Items
   items: [saleItemSchema],
   
-  // ========== TOTALS ==========
+  // Totals
   subtotal: {
     type: Number,
     required: true,
@@ -164,10 +143,10 @@ const saleSchema = new mongoose.Schema({
     default: 0
   },
   
-  // ========== PAYMENT ==========
+  // Payment
   paymentMethod: {
     type: String,
-    enum: ['cash', 'mobile_money', 'bank_transfer', 'credit', 'mpesa', 'other'],
+    enum: ['cash', 'mpesa', 'bank_transfer', 'credit', 'other'],
     default: 'cash'
   },
   paymentStatus: {
@@ -186,7 +165,7 @@ const saleSchema = new mongoose.Schema({
     min: [0, 'Change due must be positive']
   },
   
-  // ========== METADATA ==========
+  // Metadata
   saleDate: {
     type: Date,
     default: Date.now
@@ -201,12 +180,7 @@ const saleSchema = new mongoose.Schema({
     default: true
   },
   
-  // ========== OWNERSHIP ==========
-  userId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
-  },
+  // Ownership
   owner: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
@@ -216,19 +190,13 @@ const saleSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// ============================================================
-// INDEXES
-// ============================================================
+// Indexes
 saleSchema.index({ invoiceNumber: 1 });
 saleSchema.index({ owner: 1, saleDate: -1 });
 saleSchema.index({ owner: 1, customer: 1 });
 saleSchema.index({ 'items.productId': 1 });
-saleSchema.index({ paymentStatus: 1 });
-saleSchema.index({ saleDate: -1 });
 
-// ============================================================
-// MIDDLEWARE: Generate invoice number before save
-// ============================================================
+// Pre-save: Generate invoice number
 saleSchema.pre('save', async function(next) {
   if (!this.invoiceNumber) {
     const date = new Date();
@@ -241,70 +209,37 @@ saleSchema.pre('save', async function(next) {
   next();
 });
 
-// ============================================================
-// METHODS
-// ============================================================
-
-// Calculate all totals from items
+// Methods
 saleSchema.methods.calculateTotals = function() {
-  // Subtotal = sum of all item totals
   this.subtotal = this.items.reduce((sum, item) => sum + item.totalPrice, 0);
-  
-  // Total profit = sum of all item profits
   this.totalProfit = this.items.reduce((sum, item) => sum + (item.profit || 0), 0);
   
-  // Apply discount
   let totalAfterDiscount = this.subtotal;
   if (this.discount > 0) {
     if (this.discountType === 'percentage') {
-      const discountAmount = (this.subtotal * this.discount) / 100;
-      totalAfterDiscount = this.subtotal - discountAmount;
+      totalAfterDiscount = this.subtotal - (this.subtotal * this.discount / 100);
     } else {
       totalAfterDiscount = this.subtotal - this.discount;
     }
   }
   
-  // Apply tax
-  this.tax = (totalAfterDiscount * this.taxRate) / 100;
+  this.tax = totalAfterDiscount * this.taxRate / 100;
   this.total = totalAfterDiscount + this.tax;
   
   return this;
 };
 
-// Check if sale is fully paid
+// Check if fully paid
 saleSchema.methods.isFullyPaid = function() {
   return this.paymentStatus === 'paid' || this.amountPaid >= this.total;
 };
 
-// Check if sale has items
-saleSchema.methods.hasItems = function() {
-  return this.items && this.items.length > 0;
-};
-
-// Get total quantity of items sold (in base units)
+// Get total quantity sold in base units
 saleSchema.methods.getTotalQuantityInBase = function() {
   return this.items.reduce((sum, item) => sum + item.quantityInBase, 0);
 };
 
-// ============================================================
-// VIRTUALS
-// ============================================================
-
-// Total amount (alias for total)
-saleSchema.virtual('totalAmount').get(function() {
-  return this.total;
-});
-
-// Number of items in sale
-saleSchema.virtual('itemCount').get(function() {
-  return this.items ? this.items.length : 0;
-});
-
-// ============================================================
-// STATICS
-// ============================================================
-
-// Get sales summary for a date range
+// Statics
 saleSchema.statics.getSalesSummary = async function(ownerId, startDate, endDate) {
   const match = {
     owner: ownerId,
@@ -331,32 +266,6 @@ saleSchema.statics.getSalesSummary = async function(ownerId, startDate, endDate)
     totalProfit: 0,
     averageSaleValue: 0
   };
-};
-
-// Get sales by product
-saleSchema.statics.getSalesByProduct = async function(ownerId, productId, startDate, endDate) {
-  const match = {
-    owner: ownerId,
-    'items.productId': productId,
-    saleDate: { $gte: startDate, $lte: endDate },
-    isActive: true
-  };
-  
-  return this.aggregate([
-    { $match: match },
-    { $unwind: '$items' },
-    { $match: { 'items.productId': productId } },
-    {
-      $group: {
-        _id: '$items.productId',
-        totalQuantity: { $sum: '$items.quantityInBase' },
-        totalRevenue: { $sum: '$items.totalPrice' },
-        totalCost: { $sum: '$items.totalCost' },
-        totalProfit: { $sum: '$items.profit' },
-        saleCount: { $sum: 1 }
-      }
-    }
-  ]);
 };
 
 const Sale = mongoose.model('Sale', saleSchema);

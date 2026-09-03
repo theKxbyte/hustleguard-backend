@@ -1,11 +1,8 @@
 // controllers/productController.js
 import * as productService from '../services/productService.js';
-import StockBatch from '../models/StockBatch.js';
-import Product from '../models/Product.js';
-import mongoose from 'mongoose';
 
 // ============================================================
-// @desc    Create product with UOM configuration
+// @desc    Create product
 // @route   POST /api/products
 // @access  Private
 // ============================================================
@@ -52,18 +49,13 @@ export const getProducts = async (req, res) => {
 };
 
 // ============================================================
-// @desc    Get single product with stock details
+// @desc    Get single product
 // @route   GET /api/products/:id
 // @access  Private
 // ============================================================
 export const getProduct = async (req, res) => {
   try {
-    const includeStock = req.query.includeStock === 'true';
-    const product = await productService.getProductById(
-      req.params.id,
-      req.user.id,
-      includeStock
-    );
+    const product = await productService.getProductById(req.params.id, req.user.id);
     res.status(200).json({
       success: true,
       data: product
@@ -77,7 +69,7 @@ export const getProduct = async (req, res) => {
 };
 
 // ============================================================
-// @desc    Update product (including UOM config)
+// @desc    Update product
 // @route   PUT /api/products/:id
 // @access  Private
 // ============================================================
@@ -121,7 +113,7 @@ export const deleteProduct = async (req, res) => {
 };
 
 // ============================================================
-// @desc    Get low stock products (using StockBatch)
+// @desc    Get low stock products
 // @route   GET /api/products/low-stock
 // @access  Private
 // ============================================================
@@ -142,7 +134,7 @@ export const getLowStock = async (req, res) => {
 };
 
 // ============================================================
-// @desc    Get out of stock products (using StockBatch)
+// @desc    Get out of stock products
 // @route   GET /api/products/out-of-stock
 // @access  Private
 // ============================================================
@@ -163,91 +155,30 @@ export const getOutOfStock = async (req, res) => {
 };
 
 // ============================================================
-// @desc    Add stock to product (create StockBatch)
+// @desc    Add stock to product
 // @route   POST /api/products/:id/stock
 // @access  Private
 // ============================================================
 export const addProductStock = async (req, res) => {
   try {
-    const { unitName, quantity, buyPrice, batchNumber, supplier, expiryDate } = req.body;
+    const { quantity } = req.body;
     
-    if (!unitName || !quantity || !buyPrice) {
+    if (!quantity || quantity <= 0) {
       return res.status(400).json({
         success: false,
-        message: 'Please provide unitName, quantity, and buyPrice'
+        message: 'Please provide a valid quantity'
       });
     }
     
-    const stockBatch = await productService.addStock({
-      productId: req.params.id,
-      ownerId: req.user.id,
-      unitName,
-      quantity,
-      buyPrice,
-      batchNumber,
-      supplier,
-      expiryDate
-    });
-    
-    res.status(201).json({
-      success: true,
-      data: stockBatch
-    });
-  } catch (error) {
-    res.status(400).json({
-      success: false,
-      message: error.message
-    });
-  }
-};
-
-// ============================================================
-// @desc    Get product stock breakdown
-// @route   GET /api/products/:id/stock
-// @access  Private
-// ============================================================
-export const getProductStock = async (req, res) => {
-  try {
-    const stock = await productService.getProductStock(req.params.id, req.user.id);
-    res.status(200).json({
-      success: true,
-      data: stock
-    });
-  } catch (error) {
-    res.status(400).json({
-      success: false,
-      message: error.message
-    });
-  }
-};
-
-// ============================================================
-// @desc    Convert stock from one unit to another
-// @route   POST /api/products/:id/convert
-// @access  Private
-// ============================================================
-export const convertStock = async (req, res) => {
-  try {
-    const { fromUnit, toUnit, quantity } = req.body;
-    
-    if (!fromUnit || !toUnit || !quantity) {
-      return res.status(400).json({
-        success: false,
-        message: 'Please provide fromUnit, toUnit, and quantity'
-      });
-    }
-    
-    const result = await productService.convertStock({
-      productId: req.params.id,
-      ownerId: req.user.id,
-      fromUnit,
-      toUnit,
+    const product = await productService.addStock(
+      req.params.id,
+      req.user.id,
       quantity
-    });
+    );
     
     res.status(200).json({
       success: true,
-      data: result
+      data: product
     });
   } catch (error) {
     res.status(400).json({
@@ -310,7 +241,7 @@ export const bulkCreateProducts = async (req, res) => {
 };
 
 // ============================================================
-// @desc    Get stock alerts (low, out, dead)
+// @desc    Get stock alerts
 // @route   GET /api/products/alerts
 // @access  Private
 // ============================================================
@@ -321,102 +252,6 @@ export const getStockAlerts = async (req, res) => {
       success: true,
       data: alerts
     });
-  } catch (error) {
-    res.status(400).json({
-      success: false,
-      message: error.message
-    });
-  }
-};
-
-// ============================================================
-// @desc    Delete stock batch
-// @route   DELETE /api/products/:productId/stock/:batchId
-// @access  Private
-// ============================================================
-export const deleteStockBatch = async (req, res) => {
-  try {
-    const { productId, batchId } = req.params;
-    const userId = req.user.id;
-
-    const result = await productService.deleteStockBatch({
-      productId,
-      batchId,
-      ownerId: userId
-    });
-
-    res.status(200).json({
-      success: true,
-      data: result
-    });
-  } catch (error) {
-    res.status(404).json({
-      success: false,
-      message: error.message
-    });
-  }
-};
-
-// controllers/productController.js
-export const updateStockBatch = async (req, res) => {
-  try {
-    const { productId, batchId } = req.params;
-    const { quantity } = req.body;
-    const userId = req.user.id;
-
-    if (quantity === undefined || quantity < 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Please provide a valid quantity (0 or greater)'
-      });
-    }
-
-    const batch = await StockBatch.findOne({
-      _id: batchId,
-      productId: productId,
-      owner: userId
-    });
-
-    if (!batch) {
-      return res.status(404).json({
-        success: false,
-        message: 'Stock batch not found'
-      });
-    }
-
-    // Update quantity
-    const conversion = batch.unit.conversion || 1;
-    batch.remainingQuantity = quantity;
-    batch.remainingInBase = quantity * conversion;
-    await batch.save();
-
-    // Update product quantity
-    const totalStock = await StockBatch.aggregate([
-      {
-        $match: {
-          productId: new mongoose.Types.ObjectId(productId),
-          owner: userId,
-          isActive: true,
-          remainingQuantity: { $gt: 0 }
-        }
-      },
-      {
-        $group: {
-          _id: null,
-          total: { $sum: '$remainingInBase' }
-        }
-      }
-    ]);
-
-    await Product.findByIdAndUpdate(productId, { 
-      quantity: totalStock.length > 0 ? totalStock[0].total : 0 
-    });
-
-    res.status(200).json({
-      success: true,
-      data: { message: 'Stock quantity updated successfully' }
-    });
-
   } catch (error) {
     res.status(400).json({
       success: false,

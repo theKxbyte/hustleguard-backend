@@ -149,4 +149,4 @@ export const deleteExpense = async (expenseId, ownerId) => {
   await expense.save();
 
   return { success: true };
-};
+}; 

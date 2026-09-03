@@ -1,4 +1,3 @@
-// routes/reportRoutes.js
 import express from 'express';
 import { protect } from '../middlewares/auth.js';
 import {
@@ -14,12 +13,11 @@ const router = express.Router();
 
 router.use(protect);
 
-// Expense Routes
-router.post('/expenses', createExpense);
-router.get('/expenses', getExpenses);
-router.get('/expenses/summary', getExpenseSummary);
-router.get('/expenses/:id', getExpenseById);
-router.put('/expenses/:id', updateExpense);
-router.delete('/expenses/:id', deleteExpense);
+router.post('/', createExpense);
+router.get('/', getExpenses);
+router.get('/summary', getExpenseSummary);
+router.get('/:id', getExpenseById);
+router.put('/:id', updateExpense);
+router.delete('/:id', deleteExpense);
 
 export default router;

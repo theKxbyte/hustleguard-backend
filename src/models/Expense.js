@@ -1,7 +1,7 @@
+// models/Expense.js
 import mongoose from 'mongoose';
 
 const expenseSchema = new mongoose.Schema({
-  // Expense details
   description: {
     type: String,
     required: [true, 'Please add a description'],
@@ -15,66 +15,33 @@ const expenseSchema = new mongoose.Schema({
   },
   category: {
     type: String,
-    required: [true, 'Please add a category'],
-    enum: [
-      'rent', 'utilities', 'salaries', 'transport',
-      'supplies', 'marketing', 'maintenance', 'tax',
-      'insurance', 'licenses', 'equipment', 'other'
-    ],
+    enum: ['rent', 'utilities', 'salaries', 'transport', 'supplies', 'marketing', 'maintenance', 'tax', 'insurance', 'equipment', 'other'],
     default: 'other'
   },
-  categoryLabel: {
-    type: String,
-    trim: true
-  },
-  
-  // Payment
   paymentMethod: {
     type: String,
-    enum: ['cash', 'bank_transfer', 'mobile_money', 'mpesa', 'other'],
+    enum: ['cash', 'mpesa', 'bank_transfer', 'other'],
     default: 'cash'
   },
-  paymentReference: {
+  reference: {
     type: String,
     trim: true
   },
-  
-  // Date tracking
   expenseDate: {
     type: Date,
     default: Date.now
-  },
-  isRecurring: {
-    type: Boolean,
-    default: false
-  },
-  recurrenceFrequency: {
-    type: String,
-    enum: ['daily', 'weekly', 'monthly', 'quarterly', 'yearly'],
-    required: function() { return this.isRecurring; }
-  },
-  
-  // Receipt/Attachment
-  receiptUrl: {
-    type: String,
-    trim: true
   },
   notes: {
     type: String,
     maxlength: [500, 'Notes cannot exceed 500 characters']
   },
-  
-  // Status
+  receiptUrl: {
+    type: String,
+    trim: true
+  },
   isActive: {
     type: Boolean,
     default: true
-  },
-  
-  // Ownership
-  userId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
   },
   owner: {
     type: mongoose.Schema.Types.ObjectId,
@@ -88,10 +55,8 @@ const expenseSchema = new mongoose.Schema({
 // Indexes
 expenseSchema.index({ owner: 1, expenseDate: -1 });
 expenseSchema.index({ owner: 1, category: 1 });
-expenseSchema.index({ owner: 1, expenseDate: 1 });
-expenseSchema.index({ owner: 1, isActive: 1 });
 
-// Statics - Get expenses summary for date range
+// Statics
 expenseSchema.statics.getExpensesSummary = async function(ownerId, startDate, endDate) {
   const match = {
     owner: ownerId,
@@ -116,7 +81,6 @@ expenseSchema.statics.getExpensesSummary = async function(ownerId, startDate, en
   };
 };
 
-// Statics - Get expenses by category
 expenseSchema.statics.getExpensesByCategory = async function(ownerId, startDate, endDate) {
   const match = {
     owner: ownerId,
@@ -136,14 +100,6 @@ expenseSchema.statics.getExpensesByCategory = async function(ownerId, startDate,
     { $sort: { totalAmount: -1 } }
   ]);
 };
-
-// Middleware - Auto set userId to owner if not set
-expenseSchema.pre('save', function(next) {
-  if (!this.userId) {
-    this.userId = this.owner;
-  }
-  next();
-});
 
 const Expense = mongoose.model('Expense', expenseSchema);
 export default Expense;

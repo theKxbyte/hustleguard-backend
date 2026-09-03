@@ -21,14 +21,14 @@ const unitSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
-  buyPrice: {
-    type: Number,
-    min: [0, 'Buy price must be a positive number'],
-    default: 0
-  },
   sellPrice: {
     type: Number,
     min: [0, 'Sell price must be a positive number'],
+    default: 0
+  },
+  buyPrice: {
+    type: Number,
+    min: [0, 'Buy price must be a positive number'],
     default: 0
   },
   barcode: {
@@ -59,42 +59,14 @@ const productSchema = new mongoose.Schema({
     trim: true
   },
   
-  // UOM Configuration
-  baseUnit: {
-    name: {
-      type: String,
-      required: [true, 'Please add a base unit name'],
-      trim: true
-    },
-    label: {
-      type: String,
-      required: [true, 'Please add a base unit label'],
-      trim: true
-    }
-  },
+  // Units - all units for this product
+  units: [unitSchema],
   
-  sellUnits: [unitSchema],
-  stockUnits: [unitSchema],
-  
-  // Legacy fields (kept for backward compatibility)
-  buyingPrice: {
-    type: Number,
-    min: [0, 'Buying price must be a positive number'],
-    default: 0
-  },
-  sellingPrice: {
-    type: Number,
-    min: [0, 'Selling price must be a positive number'],
-    default: 0
-  },
-  quantity: {
+  // Stock - always in base unit
+  stock: {
     type: Number,
     default: 0,
-    min: [0, 'Quantity must be a positive number']
-  },
-  unit: {
-    type: String,
-    trim: true
+    min: [0, 'Stock must be a positive number']
   },
   
   minStockAlert: {
@@ -102,21 +74,17 @@ const productSchema = new mongoose.Schema({
     default: 5,
     min: [0, 'Minimum stock alert must be a positive number']
   },
+  
   supplier: {
     type: String,
     trim: true
   },
-  supplierPrice: {
-    type: Number,
-    min: [0, 'Supplier price must be a positive number']
-  },
-  lastRestockDate: {
-    type: Date
-  },
+  
   isActive: {
     type: Boolean,
     default: true
   },
+  
   owner: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
@@ -129,33 +97,34 @@ const productSchema = new mongoose.Schema({
 // Indexes
 productSchema.index({ owner: 1, name: 1 });
 productSchema.index({ owner: 1, category: 1 });
-productSchema.index({ owner: 1, 'baseUnit.name': 1 });
 
 // Methods
-productSchema.methods.isValidSellUnit = function(unitName) {
-  return this.sellUnits.some(u => u.name === unitName && u.isActive);
+productSchema.methods.getBaseUnit = function() {
+  return this.units.find(u => u.isBase === true);
 };
 
-productSchema.methods.getSellUnit = function(unitName) {
-  return this.sellUnits.find(u => u.name === unitName && u.isActive);
-};
-
-productSchema.methods.getStockUnit = function(unitName) {
-  return this.stockUnits.find(u => u.name === unitName && u.isActive);
+productSchema.methods.getUnit = function(unitName) {
+  return this.units.find(u => u.name === unitName && u.isActive);
 };
 
 productSchema.methods.getConversion = function(unitName) {
-  const allUnits = [...this.sellUnits, ...this.stockUnits];
-  const unit = allUnits.find(u => u.name === unitName);
+  const unit = this.getUnit(unitName);
   return unit ? unit.conversion : null;
 };
 
 productSchema.methods.isLowStock = function() {
-  return this.quantity <= this.minStockAlert;
+  return this.stock <= this.minStockAlert;
 };
 
 productSchema.methods.isOutOfStock = function() {
-  return this.quantity === 0;
+  return this.stock === 0;
+};
+
+// Calculate base quantity from unit quantity
+productSchema.methods.toBaseQuantity = function(unitName, quantity) {
+  const unit = this.getUnit(unitName);
+  if (!unit) throw new Error('Unit not found');
+  return quantity * unit.conversion;
 };
 
 const Product = mongoose.model('Product', productSchema);

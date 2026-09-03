@@ -2,19 +2,18 @@
 import * as posProductService from '../services/posProductService.js';
 
 // ============================================================
-// @desc    Search products for POS (optimized for cashier use)
+// @desc    Search products for POS
 // @route   GET /api/pos/products/search
 // @access  Private
 // ============================================================
 export const searchPosProducts = async (req, res) => {
   try {
     const { 
-      query,           // search by name, barcode, or category
+      query,
       category,
       limit = 20,
       offset = 0,
-      includeOutOfStock = false,
-      includeUnits = false  // NEW: Include available sell units
+      includeOutOfStock = false
     } = req.query;
 
     const result = await posProductService.searchPosProducts({
@@ -23,7 +22,6 @@ export const searchPosProducts = async (req, res) => {
       limit: parseInt(limit),
       offset: parseInt(offset),
       includeOutOfStock: includeOutOfStock === 'true',
-      includeUnits: includeUnits === 'true',  // NEW
       ownerId: req.user.id
     });
 
@@ -46,15 +44,14 @@ export const searchPosProducts = async (req, res) => {
 };
 
 // ============================================================
-// @desc    Get product by barcode (optimized for scanning)
+// @desc    Get product by barcode
 // @route   GET /api/pos/products/barcode/:barcode
 // @access  Private
 // ============================================================
 export const getProductByBarcode = async (req, res) => {
   try {
     const { barcode } = req.params;
-    
-    // NEW: Check across all units (sellUnits and stockUnits)
+
     const product = await posProductService.getProductByBarcode(
       barcode,
       req.user.id
@@ -67,15 +64,9 @@ export const getProductByBarcode = async (req, res) => {
       });
     }
 
-    // NEW: Include available sell units with stock info
-    const productWithUnits = await posProductService.getProductWithSellUnits(
-      product,
-      req.user.id
-    );
-
     res.status(200).json({
       success: true,
-      data: productWithUnits
+      data: product
     });
   } catch (error) {
     res.status(400).json({
@@ -86,13 +77,13 @@ export const getProductByBarcode = async (req, res) => {
 };
 
 // ============================================================
-// @desc    Get multiple products by IDs (for cart loading)
+// @desc    Get multiple products by IDs
 // @route   POST /api/pos/products/batch
 // @access  Private
 // ============================================================
 export const getProductsBatch = async (req, res) => {
   try {
-    const { productIds, includeUnits = false } = req.body;
+    const { productIds } = req.body;
 
     if (!productIds || !Array.isArray(productIds) || productIds.length === 0) {
       return res.status(400).json({
@@ -103,8 +94,7 @@ export const getProductsBatch = async (req, res) => {
 
     const products = await posProductService.getProductsBatch(
       productIds,
-      req.user.id,
-      includeUnits
+      req.user.id
     );
 
     res.status(200).json({
@@ -120,7 +110,7 @@ export const getProductsBatch = async (req, res) => {
 };
 
 // ============================================================
-// @desc    Get quick product suggestions (for autocomplete)
+// @desc    Get quick product suggestions
 // @route   GET /api/pos/products/suggestions
 // @access  Private
 // ============================================================
@@ -147,7 +137,7 @@ export const getProductSuggestions = async (req, res) => {
 };
 
 // ============================================================
-// @desc    Get product stock availability for POS
+// @desc    Get product stock for POS
 // @route   GET /api/pos/products/:id/stock
 // @access  Private
 // ============================================================
@@ -200,7 +190,7 @@ export const checkUnitAvailability = async (req, res) => {
 };
 
 // ============================================================
-// @desc    Get product by quick scan (supports name or barcode)
+// @desc    Quick scan product
 // @route   GET /api/pos/products/quick-scan
 // @access  Private
 // ============================================================
@@ -227,14 +217,9 @@ export const quickScanProduct = async (req, res) => {
       });
     }
 
-    const productWithUnits = await posProductService.getProductWithSellUnits(
-      product,
-      req.user.id
-    );
-
     res.status(200).json({
       success: true,
-      data: productWithUnits
+      data: product
     });
   } catch (error) {
     res.status(400).json({
@@ -245,7 +230,7 @@ export const quickScanProduct = async (req, res) => {
 };
 
 // ============================================================
-// @desc    Get recent products (for quick add)
+// @desc    Get recent products
 // @route   GET /api/pos/products/recent
 // @access  Private
 // ============================================================
@@ -271,7 +256,7 @@ export const getRecentProducts = async (req, res) => {
 };
 
 // ============================================================
-// @desc    Get product price for a specific unit
+// @desc    Get product unit price
 // @route   GET /api/pos/products/:id/price/:unitName
 // @access  Private
 // ============================================================

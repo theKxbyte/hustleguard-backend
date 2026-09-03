@@ -1,13 +1,7 @@
 // controllers/categoryController.js
 import Category from '../models/Category.js';
 import Product from '../models/Product.js';
-import mongoose from 'mongoose';
 
-// ============================================================
-// @desc    Get all categories
-// @route   GET /api/categories
-// @access  Private
-// ============================================================
 export const getCategories = async (req, res) => {
   try {
     const categories = await Category.find({
@@ -28,11 +22,6 @@ export const getCategories = async (req, res) => {
   }
 };
 
-// ============================================================
-// @desc    Get single category
-// @route   GET /api/categories/:id
-// @access  Private
-// ============================================================
 export const getCategory = async (req, res) => {
   try {
     const category = await Category.findOne({
@@ -59,16 +48,10 @@ export const getCategory = async (req, res) => {
   }
 };
 
-// ============================================================
-// @desc    Create category
-// @route   POST /api/categories
-// @access  Private
-// ============================================================
 export const createCategory = async (req, res) => {
   try {
     const { name, description, color, icon } = req.body;
 
-    // Check if category already exists
     const existing = await Category.findOne({
       name: { $regex: new RegExp(`^${name}$`, 'i') },
       owner: req.user.id
@@ -101,11 +84,6 @@ export const createCategory = async (req, res) => {
   }
 };
 
-// ============================================================
-// @desc    Update category
-// @route   PUT /api/categories/:id
-// @access  Private
-// ============================================================
 export const updateCategory = async (req, res) => {
   try {
     const { name, description, color, icon } = req.body;
@@ -122,7 +100,6 @@ export const updateCategory = async (req, res) => {
       });
     }
 
-    // Check name conflict
     if (name && name !== category.name) {
       const existing = await Category.findOne({
         name: { $regex: new RegExp(`^${name}$`, 'i') },
@@ -157,11 +134,6 @@ export const updateCategory = async (req, res) => {
   }
 };
 
-// ============================================================
-// @desc    Delete category
-// @route   DELETE /api/categories/:id
-// @access  Private
-// ============================================================
 export const deleteCategory = async (req, res) => {
   try {
     const category = await Category.findOne({
@@ -176,7 +148,6 @@ export const deleteCategory = async (req, res) => {
       });
     }
 
-    // Check if category has products
     const productCount = await Product.countDocuments({
       category: category.name,
       owner: req.user.id,
@@ -186,7 +157,7 @@ export const deleteCategory = async (req, res) => {
     if (productCount > 0) {
       return res.status(400).json({
         success: false,
-        message: `Cannot delete category with ${productCount} products. Remove products first or reassign them.`
+        message: `Cannot delete category with ${productCount} products. Remove or reassign products first.`
       });
     }
 
@@ -204,11 +175,6 @@ export const deleteCategory = async (req, res) => {
   }
 };
 
-// ============================================================
-// @desc    Get products in category
-// @route   GET /api/categories/:id/products
-// @access  Private
-// ============================================================
 export const getCategoryProducts = async (req, res) => {
   try {
     const category = await Category.findOne({
@@ -228,7 +194,7 @@ export const getCategoryProducts = async (req, res) => {
       owner: req.user.id,
       isActive: true
     })
-    .select('name description sellingPrice quantity unit totalStock')
+    .select('name description stock units category minStockAlert')
     .limit(50);
 
     res.status(200).json({

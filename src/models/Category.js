@@ -54,6 +54,7 @@ categorySchema.methods.incrementProductCount = async function() {
   return this.save();
 };
 
+
 categorySchema.methods.decrementProductCount = async function() {
   if (this.productCount > 0) {
     this.productCount -= 1;
