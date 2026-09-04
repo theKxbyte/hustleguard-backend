@@ -156,6 +156,7 @@ export const getLowStockProducts = async (userId) => {
     stock: { $gt: 0 }
   }).lean();
 
+  // Filter in JavaScript
   return products.filter(p => p.stock <= p.minStockAlert);
 };
 

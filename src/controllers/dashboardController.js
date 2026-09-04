@@ -90,12 +90,14 @@ export const getDashboardStats = async (req, res) => {
     const monthlySales = monthlySalesResult.length > 0 ? monthlySalesResult[0].totalSales : 0;
     const monthlyProfit = monthlySalesResult.length > 0 ? monthlySalesResult[0].totalProfit : 0;
 
-    // 4. Get Low Stock Count
-    const lowStockCount = await Product.countDocuments({
+    // 4. Get Low Stock Count - FIXED
+    const allProducts = await Product.find({
       owner: userId,
       isActive: true,
-      stock: { $gt: 0, $lte: '$minStockAlert' }
-    });
+      stock: { $gt: 0 }
+    }).lean();
+
+    const lowStockCount = allProducts.filter(p => p.stock <= p.minStockAlert).length;
 
     // 5. Get Out of Stock Count
     const outOfStockCount = await Product.countDocuments({

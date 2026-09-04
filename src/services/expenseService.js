@@ -1,4 +1,74 @@
+// services/expenseService.js
 import Expense from '../models/Expense.js';
+
+// ============================================================
+// Get expense summary - FIXED
+// ============================================================
+export const getExpenseSummary = async (ownerId, startDate, endDate) => {
+  // Build the query
+  const query = { 
+    owner: ownerId, 
+    isActive: true 
+  };
+
+  // If dates are provided, filter by date
+  if (startDate) {
+    const start = new Date(startDate);
+    start.setHours(0, 0, 0, 0);
+    query.expenseDate = { ...query.expenseDate, $gte: start };
+  }
+  if (endDate) {
+    const end = new Date(endDate);
+    end.setHours(23, 59, 59, 999);
+    query.expenseDate = { ...query.expenseDate, $lte: end };
+  }
+
+  console.log('📊 Expense Summary Query:', JSON.stringify(query));
+
+  // Get all expenses matching the query
+  const expenses = await Expense.find(query).lean();
+
+  console.log('📊 Found expenses:', expenses.length);
+
+  // Calculate summary
+  const totalAmount = expenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+  const count = expenses.length;
+  const averageAmount = count > 0 ? totalAmount / count : 0;
+  const minAmount = count > 0 ? Math.min(...expenses.map(e => e.amount || 0)) : 0;
+  const maxAmount = count > 0 ? Math.max(...expenses.map(e => e.amount || 0)) : 0;
+
+  // Group by category
+  const categoryMap = {};
+  expenses.forEach(e => {
+    const cat = e.category || 'other';
+    if (!categoryMap[cat]) {
+      categoryMap[cat] = { totalAmount: 0, count: 0 };
+    }
+    categoryMap[cat].totalAmount += e.amount || 0;
+    categoryMap[cat].count += 1;
+  });
+
+  const byCategory = Object.keys(categoryMap).map(key => ({
+    _id: key,
+    totalAmount: categoryMap[key].totalAmount,
+    count: categoryMap[key].count
+  })).sort((a, b) => b.totalAmount - a.totalAmount);
+
+  // Debug logs
+  console.log('📊 Summary result:', { totalAmount, count, averageAmount, minAmount, maxAmount });
+  console.log('📊 By category:', byCategory);
+
+  return {
+    summary: {
+      totalAmount,
+      count,
+      averageAmount,
+      minAmount,
+      maxAmount
+    },
+    byCategory
+  };
+};
 
 // ============================================================
 // Create expense
@@ -7,7 +77,8 @@ export const createExpense = async (data, userId) => {
   const expense = new Expense({
     ...data,
     userId: userId,
-    owner: userId
+    owner: userId,
+    isActive: true
   });
 
   await expense.save();
@@ -21,8 +92,16 @@ export const getExpenses = async (ownerId, filters = {}) => {
   const { startDate, endDate, category, limit = 100, offset = 0 } = filters;
 
   const query = { owner: ownerId, isActive: true };
-  if (startDate && endDate) {
-    query.expenseDate = { $gte: new Date(startDate), $lte: new Date(endDate) };
+  
+  if (startDate) {
+    const start = new Date(startDate);
+    start.setHours(0, 0, 0, 0);
+    query.expenseDate = { ...query.expenseDate, $gte: start };
+  }
+  if (endDate) {
+    const end = new Date(endDate);
+    end.setHours(23, 59, 59, 999);
+    query.expenseDate = { ...query.expenseDate, $lte: end };
   }
   if (category) query.category = category;
 
@@ -58,58 +137,6 @@ export const getExpenseById = async (expenseId, ownerId) => {
 };
 
 // ============================================================
-// Get expense summary
-// ============================================================
-export const getExpenseSummary = async (ownerId, startDate, endDate) => {
-  const match = {
-    owner: ownerId,
-    isActive: true
-  };
-
-  if (startDate && endDate) {
-    match.expenseDate = { $gte: startDate, $lte: endDate };
-  }
-
-  const result = await Expense.aggregate([
-    { $match: match },
-    {
-      $group: {
-        _id: null,
-        totalAmount: { $sum: '$amount' },
-        count: { $sum: 1 },
-        averageAmount: { $avg: '$amount' },
-        minAmount: { $min: '$amount' },
-        maxAmount: { $max: '$amount' }
-      }
-    }
-  ]);
-
-  // Get by category
-  const byCategory = await Expense.aggregate([
-    { $match: match },
-    {
-      $group: {
-        _id: '$category',
-        totalAmount: { $sum: '$amount' },
-        count: { $sum: 1 }
-      }
-    },
-    { $sort: { totalAmount: -1 } }
-  ]);
-
-  return {
-    summary: result.length > 0 ? result[0] : {
-      totalAmount: 0,
-      count: 0,
-      averageAmount: 0,
-      minAmount: 0,
-      maxAmount: 0
-    },
-    byCategory
-  };
-};
-
-// ============================================================
 // Update expense
 // ============================================================
 export const updateExpense = async (expenseId, data, ownerId) => {
@@ -122,9 +149,11 @@ export const updateExpense = async (expenseId, data, ownerId) => {
     throw new Error('Expense not found');
   }
 
-  Object.keys(data).forEach(key => {
-    if (key !== '_id' && key !== 'owner' && key !== 'userId') {
-      expense[key] = data[key];
+  // Update only allowed fields
+  const allowedFields = ['description', 'amount', 'category', 'paymentMethod', 'reference', 'expenseDate', 'notes'];
+  allowedFields.forEach(field => {
+    if (data[field] !== undefined) {
+      expense[field] = data[field];
     }
   });
 
@@ -149,4 +178,4 @@ export const deleteExpense = async (expenseId, ownerId) => {
   await expense.save();
 
   return { success: true };
-}; 
+};
