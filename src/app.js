@@ -33,6 +33,7 @@ const corsOptions = {
       'http://localhost:3001',
       'http://localhost:3002',
       'https://hustleguard.jreedtechgroup.co.ke',
+      'https://app.hustleguard.jreedtechgroup.co.ke',
       'http://localhost:5173',
     ];
     
