@@ -13,6 +13,8 @@ import posRoutes from './routes/posRoutes.js';
 import dashboardRoutes from './routes/dashboardRoutes.js';
 import categoryRoutes from './routes/categoryRoutes.js';
 import stockMonitorRoutes from './routes/stockMonitorRoutes.js';
+import stockMovementRoutes from './routes/stockMovementRoutes.js';
+import stockCountRoutes from './routes/stockCountRoutes.js';
 
 dotenv.config();
 
@@ -67,6 +69,8 @@ app.use('/api/pos', posRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/stock-monitor', stockMonitorRoutes);
+app.use('/api/stock-movements', stockMovementRoutes);   
+app.use('/api/stock-counts', stockCountRoutes);       
 
 app.get('/health', (req, res) => {
   res.status(200).json({ 

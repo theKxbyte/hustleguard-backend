@@ -1,6 +1,6 @@
-// services/saleService.js - CLEAN VERSION
 import Sale from '../models/Sale.js';
 import Product from '../models/Product.js';
+import StockCount from '../models/StockCount.js';
 import mongoose from 'mongoose';
 
 // ============================================================
@@ -299,6 +299,18 @@ export const getSalesStats = async (userId) => {
     ])
   ]);
 
+  const latestConfirmed = await StockCount.getLatestConfirmed(userId);
+
+  // TODO: full reconciliation view (period-accurate POS vs off-POS units,
+  // per-product breakdown, variance). This is just the profit/revenue split
+  // for now, scoped to whatever period the last confirmed count covered —
+  // not necessarily "today".
+  const offPos = latestConfirmed ? {
+    revenue: latestConfirmed.totals.estimatedSalesValue,
+    profit: latestConfirmed.totals.estimatedProfit,
+    units: latestConfirmed.totals.unrecordedUnits
+  } : { revenue: 0, profit: 0, units: 0 };
+
   return {
     today: {
       totalSales: todaySales.length,
@@ -316,7 +328,8 @@ export const getSalesStats = async (userId) => {
       totalProfit: monthSales.reduce((sum, s) => sum + s.totalProfit, 0)
     },
     topProducts,
-    paymentBreakdown
+    paymentBreakdown,
+    offPos
   };
 };
 
