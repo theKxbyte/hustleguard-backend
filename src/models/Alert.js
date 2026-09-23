@@ -68,6 +68,10 @@ alertSchema.index({ owner: 1, isRead: 1 });
 alertSchema.index({ owner: 1, createdAt: -1 });
 alertSchema.index({ productId: 1, isResolved: 1 });
 
+// TTL Index — auto-delete alerts 7 days (604800 seconds) after createdAt
+// Applies to ALL alerts, whether resolved or not.
+alertSchema.index({ createdAt: 1 }, { expireAfterSeconds: 604800 });
+
 // Methods
 alertSchema.methods.markAsRead = function() {
   this.isRead = true;
