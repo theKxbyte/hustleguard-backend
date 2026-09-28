@@ -12,6 +12,7 @@ import mongoose from 'mongoose';
 export const getDashboardStats = async (req, res) => {
   try {
     const userId = req.user.id;
+    const ownerObjId = new mongoose.Types.ObjectId(userId);
 
     // ============================================================
     // 1. Inventory Value
@@ -50,7 +51,7 @@ export const getDashboardStats = async (req, res) => {
     const posWeeklyResult = await Sale.aggregate([
       {
         $match: {
-          owner: new mongoose.Types.ObjectId(userId),
+          owner: ownerObjId,
           saleDate: { $gte: weekStart, $lt: weekEnd },
           isActive: true,
           paymentStatus: { $ne: 'refunded' }
@@ -73,13 +74,14 @@ export const getDashboardStats = async (req, res) => {
     const posTxCount  = posWeeklyResult[0]?.transactionCount || 0;
 
     // ============================================================
-    // 4. Off-POS from latest confirmed stock count overlapping the week
+    // 4. Off-POS — CURRENT period (latest confirmed count overlapping the week)
     //    Off-POS = StockCount estimated totals − POS totals inside the SAME count period
-    //    (estimatedProfit already includes POS, so we subtract to isolate off-POS)
+    //    (estimatedProfit already includes POS, so we subtract the POS slice)
     // ============================================================
-    let offPosSales  = 0;
-    let offPosProfit = 0;
-    let offPosUnits  = 0;
+    let offPosSalesCurrent  = 0;
+    let offPosProfitCurrent = 0;
+    let offPosUnitsCurrent  = 0;
+    let currentPeriod       = null;
 
     const confirmedCount = await StockCount.findOne({
       owner: userId,
@@ -94,7 +96,7 @@ export const getDashboardStats = async (req, res) => {
       const posDuringCountResult = await Sale.aggregate([
         {
           $match: {
-            owner: new mongoose.Types.ObjectId(userId),
+            owner: ownerObjId,
             saleDate: { $gte: confirmedCount.periodStart, $lte: confirmedCount.periodEnd },
             isActive: true,
             paymentStatus: { $ne: 'refunded' }
@@ -112,19 +114,69 @@ export const getDashboardStats = async (req, res) => {
       const posSalesInCount  = posDuringCountResult[0]?.totalSales  || 0;
       const posProfitInCount = posDuringCountResult[0]?.totalProfit || 0;
 
-      offPosSales  = Math.max(0, (confirmedCount.totals?.estimatedSalesValue || 0) - posSalesInCount);
-      offPosProfit = Math.max(0, (confirmedCount.totals?.estimatedProfit     || 0) - posProfitInCount);
-      offPosUnits  = Math.max(0, confirmedCount.totals?.unrecordedUnits      || 0);
+      offPosSalesCurrent  = Math.max(0, (confirmedCount.totals?.estimatedSalesValue || 0) - posSalesInCount);
+      offPosProfitCurrent = Math.max(0, (confirmedCount.totals?.estimatedProfit     || 0) - posProfitInCount);
+      offPosUnitsCurrent  = Math.max(0, confirmedCount.totals?.unrecordedUnits      || 0);
+
+      currentPeriod = {
+        start: confirmedCount.periodStart,
+        end:   confirmedCount.periodEnd
+      };
     }
 
     // ============================================================
-    // 5. Weekly totals
+    // 5. Off-POS — CUMULATIVE (all confirmed counts, per-period exact)
+    //    We subtract POS-inside-each-period from that period's estimate,
+    //    then sum across all periods. This is the airtight version.
     // ============================================================
-    const totalWeeklySales  = posSales  + offPosSales;
-    const totalWeeklyProfit = posProfit + offPosProfit;
+    const allConfirmedCounts = await StockCount.find({
+      owner: userId,
+      status: 'confirmed',
+      isActive: true
+    })
+      .select('periodStart periodEnd totals')
+      .sort({ periodEnd: 1 })
+      .lean();
+
+    let offPosSalesCumulative  = 0;
+    let offPosProfitCumulative = 0;
+    let offPosUnitsCumulative  = 0;
+
+    for (const count of allConfirmedCounts) {
+      const posInPeriod = await Sale.aggregate([
+        {
+          $match: {
+            owner: ownerObjId,
+            saleDate: { $gte: count.periodStart, $lte: count.periodEnd },
+            isActive: true,
+            paymentStatus: { $ne: 'refunded' }
+          }
+        },
+        {
+          $group: {
+            _id: null,
+            totalSales:  { $sum: '$total' },
+            totalProfit: { $sum: '$totalProfit' }
+          }
+        }
+      ]);
+
+      const posSalesInPeriod  = posInPeriod[0]?.totalSales  || 0;
+      const posProfitInPeriod = posInPeriod[0]?.totalProfit || 0;
+
+      offPosSalesCumulative  += Math.max(0, (count.totals?.estimatedSalesValue || 0) - posSalesInPeriod);
+      offPosProfitCumulative += Math.max(0, (count.totals?.estimatedProfit     || 0) - posProfitInPeriod);
+      offPosUnitsCumulative  += Math.max(0, count.totals?.unrecordedUnits      || 0);
+    }
 
     // ============================================================
-    // 6. Monthly totals
+    // 6. Weekly totals (POS + current off-POS)
+    // ============================================================
+    const totalWeeklySales  = posSales  + offPosSalesCurrent;
+    const totalWeeklyProfit = posProfit + offPosProfitCurrent;
+
+    // ============================================================
+    // 7. Monthly totals
     // ============================================================
     const monthStart = new Date();
     monthStart.setDate(1);
@@ -133,7 +185,7 @@ export const getDashboardStats = async (req, res) => {
     const monthlySalesResult = await Sale.aggregate([
       {
         $match: {
-          owner: new mongoose.Types.ObjectId(userId),
+          owner: ownerObjId,
           saleDate: { $gte: monthStart },
           isActive: true,
           paymentStatus: { $ne: 'refunded' }
@@ -152,7 +204,7 @@ export const getDashboardStats = async (req, res) => {
     const monthlyProfit = monthlySalesResult[0]?.totalProfit || 0;
 
     // ============================================================
-    // 7. Low stock / out of stock counts
+    // 8. Low stock / out of stock counts
     // ============================================================
     const allProducts = await Product.find({
       owner: userId,
@@ -169,12 +221,12 @@ export const getDashboardStats = async (req, res) => {
     });
 
     // ============================================================
-    // 8. Average daily sales (last 7 days)
+    // 9. Average daily sales (last 7 days)
     // ============================================================
     const dailySales = await Sale.aggregate([
       {
         $match: {
-          owner: new mongoose.Types.ObjectId(userId),
+          owner: ownerObjId,
           saleDate: { $gte: weekStart, $lt: weekEnd },
           isActive: true,
           paymentStatus: { $ne: 'refunded' }
@@ -217,9 +269,20 @@ export const getDashboardStats = async (req, res) => {
             transactions: posTxCount
           },
           offPos: {
-            sales:  offPosSales,
-            profit: offPosProfit,
-            units:  offPosUnits
+            // Current = latest confirmed count only (this period)
+            current: {
+              sales:  offPosSalesCurrent,
+              profit: offPosProfitCurrent,
+              units:  offPosUnitsCurrent,
+              period: currentPeriod
+            },
+            // Cumulative = sum across all confirmed counts
+            cumulative: {
+              sales:   offPosSalesCumulative,
+              profit:  offPosProfitCumulative,
+              units:   offPosUnitsCumulative,
+              periods: allConfirmedCounts.length
+            }
           },
           total: {
             sales:  totalWeeklySales,
